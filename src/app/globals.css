@@ -1,0 +1,223 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens.
+ *
+ * The palette is the mobile app's own (edu-mobile/src/theme/palette.ts), so
+ * the dashboard reads as part of the same product. Two values are worth
+ * knowing about:
+ *
+ *   --color-primary in light mode is #C94A0A, not the brand orange #F26A1B.
+ *   White text on the brand orange fails WCAG AA; it only clears 4.5:1 from
+ *   about this shade down. The brand orange is still used, as a surface and
+ *   an accent, where nothing is written on top of it.
+ *
+ *   Light and dark are two designed palettes rather than an inversion, again
+ *   matching the app.
+ */
+
+@theme {
+  --color-background: #f7f7f8;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f7f7f8;
+  --color-surface-raised: #ffffff;
+  --color-border: #e1e1e5;
+  --color-border-strong: #c8c8cf;
+  --color-foreground: #101014;
+  --color-muted: #6e6e7a;
+  --color-subtle: #9a9aa5;
+
+  --color-primary: #c94a0a;
+  --color-primary-fg: #ffffff;
+  --color-primary-soft: #fff4ec;
+  --color-primary-border: #f6c9ab;
+
+  --color-accent: #c01f1f;
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: #fff1f1;
+
+  --color-success: #15803d;
+  --color-success-soft: #eafaf0;
+  --color-warning: #b45309;
+  --color-warning-soft: #fff7ed;
+  --color-info: #1d4ed8;
+  --color-info-soft: #eef3ff;
+  --color-danger: #c01f1f;
+  --color-danger-soft: #fff1f1;
+
+  --color-brand-orange: #f26a1b;
+  --color-brand-red: #e0322f;
+
+  --radius-card: 0.875rem;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans Arabic', 'Segoe UI Arabic', sans-serif;
+}
+
+/*
+ * Dark theme.
+ *
+ * Applied from an explicit `data-theme="dark"` on <html>, which the theme
+ * script sets before paint. There is no bare prefers-color-scheme rule: the
+ * user's stored choice has to be able to beat the OS in both directions, and
+ * a media query cannot be overridden by an attribute that appears later.
+ */
+:root[data-theme='dark'] {
+  --color-background: #0b0b0d;
+  --color-surface: #14141a;
+  --color-surface-alt: #1a1a20;
+  --color-surface-raised: #22222a;
+  --color-border: #2e2e37;
+  --color-border-strong: #4a4a55;
+  --color-foreground: #f7f7f8;
+  --color-muted: #a8a8b2;
+  --color-subtle: #7a7a86;
+
+  --color-primary: #fb8038;
+  --color-primary-fg: #1a0c03;
+  --color-primary-soft: #2c1b11;
+  --color-primary-border: #57351f;
+
+  --color-accent: #f65a5a;
+  --color-accent-fg: #200808;
+  --color-accent-soft: #301616;
+
+  --color-success: #4ade80;
+  --color-success-soft: #10281a;
+  --color-warning: #fbbf24;
+  --color-warning-soft: #2a1f0a;
+  --color-info: #7dafff;
+  --color-info-soft: #101c33;
+  --color-danger: #f65a5a;
+  --color-danger-soft: #301616;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: light;
+  }
+
+  html[data-theme='dark'] {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /*
+   * Focus is never removed, only restyled. Keyboard operation of a table full
+   * of destructive actions is not optional.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Respect a reduced-motion preference everywhere, including third-party UI. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-strong);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .card {
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+  }
+
+  /* Skeleton shimmer. Uses a gradient sweep rather than a pulsing opacity so
+     it reads as loading rather than as a disabled control. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--color-surface-alt);
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-border) 60%, transparent),
+      transparent
+    );
+    animation: skeleton-sweep 1.6s infinite;
+  }
+
+  @keyframes skeleton-sweep {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  /*
+   * Horizontal scroll container for wide tables on small screens.
+   *
+   * `position: relative` is load-bearing, not cosmetic. `overflow-x: auto`
+   * only clips descendants whose containing block is inside this element —
+   * and an absolutely positioned descendant with no positioned ancestor is
+   * laid out against the initial containing block instead, escaping the clip
+   * entirely.
+   *
+   * Every table here has `sr-only` cells (visually hidden column headers),
+   * and `sr-only` is `position: absolute`. Without this line those sit at the
+   * far right of a 700px-wide table inside a 360px viewport, stretch the
+   * document, and the whole page scrolls sideways — while the table it came
+   * from looks perfectly contained. Caught by the responsive end-to-end test.
+   */
+  .table-scroll {
+    position: relative;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
+@layer utilities {
+  /* Logical properties so every one of these mirrors correctly in Arabic. */
+  .start-0 {
+    inset-inline-start: 0;
+  }
+  .end-0 {
+    inset-inline-end: 0;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}
