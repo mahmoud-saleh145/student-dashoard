@@ -16,6 +16,7 @@ import type {
   LibraryPartRow,
 } from '@/types/commerce';
 
+import { DocumentUploadField } from './document-upload-field';
 import {
   useCreateLibraryPackage,
   useCreateLibraryPart,
@@ -24,6 +25,7 @@ import {
   useUpdateLibraryPart,
   useUpdateMaterial,
 } from './hooks';
+import { useLibraryUpload } from './upload';
 
 /**
  * Library authoring dialogs.
@@ -281,9 +283,11 @@ export function LibraryPartDialog({
   const [titleAr, setTitleAr] = useState('');
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
-  const [objectKey, setObjectKey] = useState('');
   const [pageCount, setPageCount] = useState('');
   const [isPreview, setIsPreview] = useState(false);
+
+  // The object key comes from the upload, never from a person typing one.
+  const upload = useLibraryUpload();
 
   useEffect(() => {
     if (!open) return;
@@ -291,15 +295,15 @@ export function LibraryPartDialog({
     setTitleAr(part?.titleAr ?? '');
     setDescription(part?.description ?? '');
     setPrice(part?.price != null ? String(part.price) : '');
-    setObjectKey('');
     setPageCount(part?.pageCount != null ? String(part.pageCount) : '');
     setIsPreview(part?.isPreview ?? false);
+    upload.reset();
     create.reset();
     update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, part?.id]);
 
-  const pending = create.isPending || update.isPending;
+  const pending = create.isPending || update.isPending || upload.isBusy;
   const errors = fieldErrors(create.error ?? update.error);
   const priceValue = Number(price);
   const zeroPriced = !isPreview && price !== '' && priceValue === 0;
@@ -316,7 +320,9 @@ export function LibraryPartDialog({
           description: description || undefined,
           price: price !== '' ? priceValue : undefined,
           isPreview,
-          objectKey: objectKey || undefined,
+          // Absent when no new file was chosen, which is what keeps the
+          // current file attached on an edit that only changes the price.
+          objectKey: upload.objectKey ?? undefined,
           pageCount: pageCount !== '' ? Number(pageCount) : undefined,
         });
       } else {
@@ -325,7 +331,8 @@ export function LibraryPartDialog({
           titleAr: titleAr || undefined,
           description: description || undefined,
           price: priceValue,
-          objectKey,
+          objectKey: upload.objectKey as string,
+          sizeBytes: upload.sizeBytes ?? undefined,
           pageCount: pageCount !== '' ? Number(pageCount) : undefined,
           isPreview,
         });
@@ -338,8 +345,13 @@ export function LibraryPartDialog({
     }
   };
 
+  // Creating needs a file; editing keeps the one already attached unless a
+  // new upload replaced it. Either way an upload in flight blocks the save,
+  // so a part can never be created pointing at a key that is still uploading.
   const valid =
-    title.trim().length >= 2 && (part ? true : objectKey.trim().length > 0 && price !== '');
+    title.trim().length >= 2 &&
+    !upload.isBusy &&
+    (part ? true : Boolean(upload.objectKey) && price !== '');
 
   return (
     <Modal
@@ -452,34 +464,18 @@ export function LibraryPartDialog({
           />
         </div>
 
-        <Field
-          label={part ? 'Replace file (object key)' : 'File (object key)'}
+        <DocumentUploadField
+          upload={upload}
           required={!part}
-          hint={
-            part
-              ? 'Leave empty to keep the current file. Replacing a document that students already hold is allowed but logged.'
-              : 'The storage key returned by the presigned upload — never a public URL.'
-          }
-          error={errors.objectKey}
-        >
-          {({ id, describedBy, invalid }) => (
-            <TextInput
-              id={id}
-              aria-describedby={describedBy}
-              invalid={invalid}
-              value={objectKey}
-              onChange={(event) => setObjectKey(event.target.value)}
-              placeholder="library/physics/part-1.pdf"
-              className="font-mono text-xs"
-            />
-          )}
-        </Field>
+          hasExistingDocument={part?.hasDocument}
+          error={errors.objectKey?.join(' ') ?? null}
+        />
 
-        {part?.hasDocument ? (
-          <p className="text-xs text-muted">
-            A file is attached. Its key is never sent to any client, including this one.
-          </p>
-        ) : null}
+        <p className="text-xs text-muted">
+          The file goes straight to private storage. Students open it through a
+          short-lived link tied to their account — no permanent or public URL is
+          ever created, and the storage key is never sent to a student.
+        </p>
 
         {(create.error ?? update.error) && Object.keys(errors).length === 0 ? (
           <p role="alert" className="text-sm font-medium text-danger">

@@ -68,6 +68,14 @@ export interface GenerateCodesInput {
   courseId?: string;
   sectionId?: string;
   teacherId?: string;
+  /**
+   * Required when `targetType` is `PART`.
+   *
+   * `CodesService.generateBatch` validates it — the part must exist, be on
+   * sale, and have at least one section, since a card for a part that unlocks
+   * nothing is worse than no card at all.
+   */
+  coursePartId?: string;
   batchName?: string;
   count: number;
   priceAmount?: number;

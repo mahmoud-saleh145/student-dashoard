@@ -49,7 +49,16 @@ export default defineConfig({
     {
       command: `node e2e/stub-api/server.mjs`,
       port: STUB_API_PORT,
-      reuseExistingServer: !process.env.CI,
+      // Never reused, unlike the app below. The stub starts in well under a
+      // second, so reuse buys nothing — and it costs a great deal: a stub left
+      // running from an earlier edit keeps serving the old routes and the old
+      // role gates, so a test asserting on a change made since then fails, or
+      // worse passes, for reasons unrelated to the code under test. That is
+      // not hypothetical: a stale stub answered 200 to a teacher on
+      // `/admin/codes/generate` after the gate refusing it was already
+      // written. A port conflict here is a loud, correct failure; a stale
+      // answer is a silent, wrong one.
+      reuseExistingServer: false,
       env: { STUB_API_PORT: String(STUB_API_PORT) },
       stdout: 'ignore',
       stderr: 'pipe',

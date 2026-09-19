@@ -28,6 +28,7 @@ import {
   CODE_STATUSES,
   CODE_STATUS_LABEL,
   CODE_TARGET_TYPES,
+  CODE_TARGET_TYPE_LABEL,
   type CodeRow,
 } from '@/types/domain';
 
@@ -86,8 +87,8 @@ export function CodeList() {
       render: (code) => (
         <div className="flex min-w-0 flex-col">
           <span className="truncate text-foreground">{code.targetName}</span>
-          <Badge tone="neutral" className="mt-1 w-fit">
-            {code.targetType.toLowerCase()}
+          <Badge tone={code.targetType === 'PART' ? 'info' : 'neutral'} className="mt-1 w-fit">
+            {CODE_TARGET_TYPE_LABEL[code.targetType]}
           </Badge>
         </div>
       ),
@@ -211,7 +212,7 @@ export function CodeList() {
         emptyDescription={
           list.isFiltered
             ? 'Try a different status or target.'
-            : 'Generate a batch to sell access to a course, a section or a teacher’s whole catalogue.'
+            : 'Generate a batch to sell access to a course, one of its parts, a section, or a teacher’s whole catalogue.'
         }
         emptyAction={
           <Button size="sm" onClick={() => setGenerating(true)}>
@@ -260,7 +261,7 @@ export function CodeList() {
               onChange={(value) => list.setFilter('targetType', value)}
               options={CODE_TARGET_TYPES.map((type) => ({
                 value: type,
-                label: type.toLowerCase(),
+                label: CODE_TARGET_TYPE_LABEL[type],
               }))}
             />
           </FilterBar>
@@ -337,8 +338,14 @@ function CodeDrawer({ code, onClose }: { code: CodeRow | null; onClose: () => vo
             columns={2}
             items={[
               { label: 'Status', value: <CodeStatusBadge status={code.status} /> },
-              { label: 'Target type', value: code.targetType.toLowerCase() },
+              {
+                label: 'Target type',
+                value: CODE_TARGET_TYPE_LABEL[code.targetType],
+              },
               { label: 'Target', value: code.targetName },
+              ...(code.coursePart
+                ? [{ label: 'Part', value: code.coursePart.title }]
+                : []),
               {
                 label: 'Amount',
                 value: code.amount === null ? '—' : formatMoney(code.amount, code.currency),

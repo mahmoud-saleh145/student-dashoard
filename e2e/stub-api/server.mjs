@@ -74,7 +74,18 @@ const byId = (id) => Object.values(USERS).find((user) => user.id === id) ?? null
  * The suite pokes these through `/__test__/*` to force conditions the real API
  * would take days to produce naturally.
  */
+/**
+ * What the last write carried.
+ *
+ * Recorded so a test can assert on the *request* rather than on a rendered
+ * string — "the dashboard sent coursePartId" is the claim that matters, and
+ * reading it back off the screen would not prove it.
+ */
+const lastRequest = { generateCodes: null, libraryPart: null };
+
 const control = {
+  /** Makes the storage PUT fail, for the upload-failure path. */
+  failUpload: false,
   /** When true, the next request with a valid token answers 401 once. */
   expireAccessTokenOnce: false,
   /** Endpoints that should answer 403 regardless of the caller. */
@@ -689,7 +700,20 @@ const server = createServer(async (req, res) => {
 
   // --- test control -------------------------------------------------------
   if (path.startsWith('/__test__/')) {
+    if (path === '/__test__/last-generate-codes') {
+      return ok(res, lastRequest.generateCodes ?? {});
+    }
+    if (path === '/__test__/last-library-part') {
+      return ok(res, lastRequest.libraryPart ?? {});
+    }
+    if (path === '/__test__/fail-upload') {
+      control.failUpload = true;
+      return ok(res, { armed: true });
+    }
     if (path === '/__test__/reset') {
+      control.failUpload = false;
+      lastRequest.generateCodes = null;
+      lastRequest.libraryPart = null;
       control.expireAccessTokenOnce = false;
       control.forbid.clear();
       control.requests.length = 0;
@@ -708,6 +732,45 @@ const server = createServer(async (req, res) => {
       return ok(res, { requests: control.requests });
     }
     return fail(res, 404, 'NOT_FOUND', 'Unknown control endpoint.');
+  }
+
+  // --- object storage stand-in --------------------------------------------
+  //
+  // The browser PUTs here directly, cross-origin, exactly as it would to R2 —
+  // which means a real CORS preflight. Proxying the bytes through the app
+  // instead would test a flow the product does not have.
+  if (path.startsWith('/__storage__/')) {
+    const cors = {
+      'Access-Control-Allow-Origin': req.headers.origin ?? '*',
+      'Access-Control-Allow-Methods': 'PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'content-type, Content-Type',
+      'Access-Control-Max-Age': '600',
+    };
+
+    if (method === 'OPTIONS') {
+      res.writeHead(204, cors);
+      return res.end();
+    }
+
+    if (method === 'PUT') {
+      // Drain the body so the socket is not left half-read.
+      await new Promise((resolve) => {
+        req.on('data', () => undefined);
+        req.on('end', resolve);
+        req.on('error', resolve);
+      });
+
+      if (control.failUpload) {
+        res.writeHead(500, { ...cors, 'content-type': 'text/plain' });
+        return res.end('storage unavailable');
+      }
+
+      res.writeHead(200, { ...cors, etag: '"stub-etag"' });
+      return res.end();
+    }
+
+    res.writeHead(405, cors);
+    return res.end();
   }
 
   // --- login (unauthenticated) --------------------------------------------
@@ -787,6 +850,14 @@ const server = createServer(async (req, res) => {
     '/admin/library',
     '/admin/announcements',
     '/admin/part-purchases',
+    // @AdminOnly() on the real controller. /storage/uploads/attachment stays
+    // @StaffOnly(), so only this one path is listed rather than all of
+    // /storage.
+    '/storage/uploads/library-document',
+    // Every admin code route is @AdminOnly(), including generation. Adding
+    // the PART target changed none of that.
+    '/admin/codes',
+    '/admin/code-batches',
   ];
 
   if (adminOnly.some((prefix) => path === prefix || path.startsWith(`${prefix}/`)) && !isAdmin) {
@@ -819,6 +890,41 @@ const server = createServer(async (req, res) => {
     return page(res, rows);
   }
 
+
+  // --- storage presign ----------------------------------------------------
+  if (path === '/storage/uploads/library-document' && method === 'POST') {
+    const body = await readBody(req);
+    const ext = (body.filename ?? '').includes('.')
+      ? `.${String(body.filename).split('.').pop().toLowerCase()}`
+      : '.bin';
+
+    return ok(res, {
+      // A write-only, short-lived URL. The key is chosen by the server; the
+      // client never names one.
+      uploadUrl: `http://127.0.0.1:${PORT}/__storage__/library/stub-${Date.now()}${ext}`,
+      objectKey: `library/stub-object${ext}`,
+      expiresIn: 3600,
+      requiredHeaders: { 'Content-Type': body.contentType },
+    });
+  }
+
+  if (path === '/admin/codes/generate' && method === 'POST') {
+    const body = await readBody(req);
+    lastRequest.generateCodes = body;
+
+    return ok(res, {
+      batchId: 'batch-new',
+      batchName: body.batchName ?? null,
+      targetType: body.targetType ?? 'COURSE',
+      targetName:
+        body.targetType === 'PART' ? 'Part 1 - Before mid' : 'Anatomy 101',
+      requested: body.count ?? 0,
+      created: body.count ?? 0,
+      codes: Array.from({ length: Math.min(body.count ?? 0, 5) }, (_, i) =>
+        `CARD-${String(i + 1).padStart(4, '0')}`,
+      ),
+    });
+  }
 
   // --- wallet (admin only) ------------------------------------------------
   if (path === '/admin/wallets' && method === 'GET') return page(res, WALLETS);
@@ -964,6 +1070,11 @@ const server = createServer(async (req, res) => {
       data: { items: LIBRARY_PURCHASES.items, meta: metaFor(LIBRARY_PURCHASES.items), totals: LIBRARY_PURCHASES.totals },
     });
   }
+  if (/^\/admin\/library\/materials\/[^/]+\/parts$/.test(path) && method === 'POST') {
+    lastRequest.libraryPart = await readBody(req);
+    return ok(res, LIBRARY_MATERIAL_DETAIL);
+  }
+
   if (/^\/admin\/library\/materials\/[^/]+(\/parts)?$/.test(path)) {
     return ok(res, LIBRARY_MATERIAL_DETAIL);
   }

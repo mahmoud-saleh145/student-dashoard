@@ -347,6 +347,8 @@ export interface CodeRow {
   course: { id: string; title: string } | null;
   section: { id: string; title: string; courseId: string } | null;
   teacher: { id: string; fullName: string } | null;
+  /** Set on a PART-scoped card. The backend selects it on every code row. */
+  coursePart: { id: string; title: string } | null;
   batchId: string | null;
   batchName: string | null;
   amount: number | null;

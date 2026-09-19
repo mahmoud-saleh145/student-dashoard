@@ -12,6 +12,7 @@ import {
   useGenerateCodes,
   type GenerateCodesResult,
 } from '@/features/codes/hooks';
+import { useCourseParts } from '@/features/course-parts/hooks';
 import { useTeacherOptions } from '@/features/teachers/hooks';
 import { api } from '@/lib/api-client';
 import {
@@ -34,11 +35,17 @@ import type { CodeTargetType, CourseSummary, SectionRow } from '@/types/domain';
  *   Course  — the sections that exist **right now**. Sections added later are
  *             not unlocked by these cards.
  *   Section — exactly one section.
+ *   Part    — the sections that belong to one part of a course. This is how a
+ *             course sold in pieces is actually sold: the card unlocks the
+ *             part's sections and nothing else.
  *   Teacher — the courses assigned to that teacher **right now**. Courses they
  *             publish later are not unlocked by these cards.
  *
  * The scope is frozen server-side at generation, so the promise made on this
  * screen is the promise the redemption honours.
+ *
+ * **None of these touch the wallet.** A card is bought offline and redeemed
+ * here; wallet credit buys library material and nothing else.
  */
 export function GenerateCodesDialog({
   open,
@@ -53,6 +60,7 @@ export function GenerateCodesDialog({
   const [targetType, setTargetType] = useState<CodeTargetType>('COURSE');
   const [courseId, setCourseId] = useState('');
   const [sectionId, setSectionId] = useState('');
+  const [coursePartId, setCoursePartId] = useState('');
   const [teacherId, setTeacherId] = useState('');
   const [batchName, setBatchName] = useState('');
   const [count, setCount] = useState('50');
@@ -77,6 +85,19 @@ export function GenerateCodesDialog({
     enabled: open && targetType === 'SECTION' && Boolean(courseId),
   });
 
+  // The same hook the course's Parts tab uses, so a part's price and section
+  // count are read from one place rather than fetched a second way here.
+  const parts = useCourseParts(
+    open && targetType === 'PART' && courseId ? courseId : '',
+  );
+
+  // A card for a part with no sections would unlock nothing, and the backend
+  // refuses it. Offering it here and letting the server say no would be a
+  // worse way to learn that.
+  const sellableParts = (parts.data?.parts ?? []).filter(
+    (part) => part.isActive && part.sectionCount > 0,
+  );
+
   const quantity = Number(count);
   const quantityValid = Number.isInteger(quantity) && quantity >= 1 && quantity <= 5000;
 
@@ -85,7 +106,9 @@ export function GenerateCodesDialog({
       ? Boolean(teacherId)
       : targetType === 'SECTION'
         ? Boolean(sectionId)
-        : Boolean(courseId);
+        : targetType === 'PART'
+          ? Boolean(coursePartId)
+          : Boolean(courseId);
 
   const canSubmit = quantityValid && targetChosen && !generate.isPending;
 
@@ -97,6 +120,7 @@ export function GenerateCodesDialog({
     setPrefix('');
     setExpiresAt('');
     setSectionId('');
+    setCoursePartId('');
   }
 
   async function submit() {
@@ -107,6 +131,7 @@ export function GenerateCodesDialog({
         targetType,
         courseId: targetType === 'TEACHER' ? undefined : courseId || undefined,
         sectionId: targetType === 'SECTION' ? sectionId : undefined,
+        coursePartId: targetType === 'PART' ? coursePartId : undefined,
         teacherId: targetType === 'TEACHER' ? teacherId : undefined,
         batchName: batchName.trim() || undefined,
         count: quantity,
@@ -232,9 +257,11 @@ export function GenerateCodesDialog({
                 onChange={(event) => {
                   setTargetType(event.target.value as CodeTargetType);
                   setSectionId('');
+                  setCoursePartId('');
                 }}
                 options={[
                   { value: 'COURSE', label: 'A whole course' },
+                  { value: 'PART', label: 'One part of a course' },
                   { value: 'SECTION', label: 'One section of a course' },
                   { value: 'TEACHER', label: 'Everything by one teacher' },
                 ]}
@@ -245,9 +272,11 @@ export function GenerateCodesDialog({
           <p className="rounded-lg border border-info/30 bg-info-soft p-3 text-xs text-info">
             {targetType === 'COURSE'
               ? 'Unlocks the sections that exist right now. A section added after today will not be unlocked by these cards.'
-              : targetType === 'SECTION'
-                ? 'Unlocks exactly this section and nothing else in the course.'
-                : 'Unlocks the courses assigned to this teacher right now. Courses they publish later will not be unlocked by these cards.'}
+              : targetType === 'PART'
+                ? 'Unlocks the sections that belong to this part right now. Paid for the same way as a whole course — never with wallet credit.'
+                : targetType === 'SECTION'
+                  ? 'Unlocks exactly this section and nothing else in the course.'
+                  : 'Unlocks the courses assigned to this teacher right now. Courses they publish later will not be unlocked by these cards.'}
           </p>
 
           {targetType === 'TEACHER' ? (
@@ -281,6 +310,43 @@ export function GenerateCodesDialog({
                   />
                 )}
               </Field>
+
+              {targetType === 'PART' ? (
+                <Field
+                  label="Part"
+                  required
+                  hint={
+                    courseId && !parts.isLoading && sellableParts.length === 0
+                      ? 'This course has no part that unlocks anything yet. Add sections to a part first.'
+                      : undefined
+                  }
+                >
+                  {({ id, describedBy }) => (
+                    <Select
+                      id={id}
+                      aria-describedby={describedBy}
+                      value={coursePartId}
+                      onChange={(event) => setCoursePartId(event.target.value)}
+                      placeholder={
+                        !courseId
+                          ? 'Choose a course first'
+                          : parts.isLoading
+                            ? 'Loading…'
+                            : sellableParts.length === 0
+                              ? 'No sellable parts'
+                              : 'Choose a part'
+                      }
+                      disabled={!courseId || sellableParts.length === 0}
+                      options={sellableParts.map((part) => ({
+                        value: part.id,
+                        label: `${part.title} — ${part.sectionCount} section${
+                          part.sectionCount === 1 ? '' : 's'
+                        }`,
+                      }))}
+                    />
+                  )}
+                </Field>
+              ) : null}
 
               {targetType === 'SECTION' ? (
                 <Field label="Section" required>

@@ -19,7 +19,11 @@ import {
 } from '@/lib/export-excel';
 import { formatDateTime, formatMoney, formatNumber } from '@/lib/format';
 import { useListQuery } from '@/lib/use-list-query';
-import { CODE_TARGET_TYPES, type CodeBatchRow } from '@/types/domain';
+import {
+  CODE_TARGET_TYPES,
+  CODE_TARGET_TYPE_LABEL,
+  type CodeBatchRow,
+} from '@/types/domain';
 
 const FILTER_KEYS = ['targetType'] as const;
 
@@ -55,7 +59,7 @@ export function BatchList() {
         filename: exportFilename(batch.name ?? `${batch.targetName}-batch`),
         sheetName: 'Codes',
         title: `${batch.targetName} — ${batch.name ?? 'access codes'}`,
-        subtitle: `${data.codes.length} cards · ${batch.targetType.toLowerCase()} scope · created ${formatDateTime(batch.createdAt)}`,
+        subtitle: `${data.codes.length} cards · ${CODE_TARGET_TYPE_LABEL[batch.targetType]} scope · created ${formatDateTime(batch.createdAt)}`,
         columns: [
           { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
           { header: 'Status', key: 'status', width: 14, value: (row) => row.status },
@@ -106,7 +110,11 @@ export function BatchList() {
     {
       key: 'targetType',
       header: 'Target category',
-      render: (batch) => <Badge tone="neutral">{batch.targetType.toLowerCase()}</Badge>,
+      render: (batch) => (
+        <Badge tone={batch.targetType === 'PART' ? 'info' : 'neutral'}>
+          {CODE_TARGET_TYPE_LABEL[batch.targetType]}
+        </Badge>
+      ),
     },
     {
       key: 'targetName',
@@ -218,7 +226,7 @@ export function BatchList() {
               onChange={(value) => list.setFilter('targetType', value)}
               options={CODE_TARGET_TYPES.map((type) => ({
                 value: type,
-                label: type.toLowerCase(),
+                label: CODE_TARGET_TYPE_LABEL[type],
               }))}
             />
           </FilterBar>
