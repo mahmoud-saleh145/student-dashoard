@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
@@ -124,18 +125,13 @@ function SidebarContent({
     <>
       <div className="flex h-16 shrink-0 items-center justify-between gap-2 border-b border-border px-4">
         <Link href="/" className="flex min-w-0 items-center gap-2.5">
+          {/* The plate behind the mark is the logo's own ground, so the cog
+              keeps the contrast it was drawn with in either theme. */}
           <span
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-fg"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-orange"
             aria-hidden="true"
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Z"
-                stroke="currentColor"
-                strokeWidth="1.9"
-                strokeLinejoin="round"
-              />
-            </svg>
+            <Image src="/logo-mark.png" alt="" width={20} height={22} priority />
           </span>
           <span className="truncate text-sm font-semibold text-foreground">EduPlatform</span>
         </Link>
