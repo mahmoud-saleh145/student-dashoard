@@ -7,10 +7,13 @@
  * the dashboard reads as part of the same product. Two values are worth
  * knowing about:
  *
- *   --color-primary in light mode is #C94A0A, not the brand orange #F26A1B.
- *   White text on the brand orange fails WCAG AA; it only clears 4.5:1 from
- *   about this shade down. The brand orange is still used, as a surface and
- *   an accent, where nothing is written on top of it.
+ *   --color-primary in light mode is #A85F06, not the brand orange #FBB150.
+ *   White text on the brand orange fails WCAG AA outright (1.8:1); it only
+ *   clears 4.5:1 from about this shade down. The brand orange is still used,
+ *   as a surface and an accent, where nothing is written on top of it.
+ *
+ *   Both brand values are sampled from the Student Center artwork — the plate
+ *   at #FBB150 and the ink at #D52027.
  *
  *   Light and dark are two designed palettes rather than an inversion, again
  *   matching the app.
@@ -27,14 +30,14 @@
   --color-muted: #6e6e7a;
   --color-subtle: #9a9aa5;
 
-  --color-primary: #c94a0a;
+  --color-primary: #a85f06;
   --color-primary-fg: #ffffff;
-  --color-primary-soft: #fff4ec;
-  --color-primary-border: #f6c9ab;
+  --color-primary-soft: #fff5e8;
+  --color-primary-border: #fcc173;
 
-  --color-accent: #c01f1f;
+  --color-accent: #d52027;
   --color-accent-fg: #ffffff;
-  --color-accent-soft: #fff1f1;
+  --color-accent-soft: #ffedee;
 
   --color-success: #15803d;
   --color-success-soft: #eafaf0;
@@ -42,11 +45,11 @@
   --color-warning-soft: #fff7ed;
   --color-info: #1d4ed8;
   --color-info-soft: #eef3ff;
-  --color-danger: #c01f1f;
-  --color-danger-soft: #fff1f1;
+  --color-danger: #d52027;
+  --color-danger-soft: #ffedee;
 
-  --color-brand-orange: #f26a1b;
-  --color-brand-red: #e0322f;
+  --color-brand-orange: #fbb150;
+  --color-brand-red: #d52027;
 
   --radius-card: 0.875rem;
 
@@ -74,14 +77,14 @@
   --color-muted: #a8a8b2;
   --color-subtle: #7a7a86;
 
-  --color-primary: #fb8038;
-  --color-primary-fg: #1a0c03;
-  --color-primary-soft: #2c1b11;
-  --color-primary-border: #57351f;
+  --color-primary: #fbb150;
+  --color-primary-fg: #2a1206;
+  --color-primary-soft: #3a2408;
+  --color-primary-border: #6b4410;
 
-  --color-accent: #f65a5a;
-  --color-accent-fg: #200808;
-  --color-accent-soft: #301616;
+  --color-accent: #f44e54;
+  --color-accent-fg: #2b0709;
+  --color-accent-soft: #3a1416;
 
   --color-success: #4ade80;
   --color-success-soft: #10281a;
@@ -89,8 +92,8 @@
   --color-warning-soft: #2a1f0a;
   --color-info: #7dafff;
   --color-info-soft: #101c33;
-  --color-danger: #f65a5a;
-  --color-danger-soft: #301616;
+  --color-danger: #f44e54;
+  --color-danger-soft: #3a1416;
 }
 
 @layer base {
