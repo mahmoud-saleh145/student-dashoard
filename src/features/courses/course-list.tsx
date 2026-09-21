@@ -37,9 +37,15 @@ const FILTER_KEYS = ['status', 'universityId', 'academicYearId', 'subjectId'] as
  * A teacher gets the same screen: the backend scopes the endpoint to their own
  * assignments, so no client-side filtering is needed to keep them out of other
  * teachers' courses — and none would be trustworthy if it were.
+ *
+ * The same screen, minus the creation controls: a course is created by an
+ * administrator, who assigns it to whoever will teach it.
  */
 export function CourseList() {
-  const { isTeacher, isAdmin } = useSession();
+  const { isTeacher, isAdmin, can } = useSession();
+  // `POST /admin/courses` is @AdminOnly(). A teacher is shown the courses an
+  // administrator assigned to them and no way to start one of their own.
+  const canCreate = can('createCourses');
   const list = useListQuery({ filterKeys: FILTER_KEYS, defaultSort: undefined });
   const [creating, setCreating] = useState(false);
 
@@ -194,7 +200,9 @@ export function CourseList() {
                 Academic structure
               </ButtonLink>
             ) : null}
-            <Button onClick={() => setCreating(true)}>New course</Button>
+            {canCreate ? (
+              <Button onClick={() => setCreating(true)}>New course</Button>
+            ) : null}
           </>
         }
       />
@@ -216,18 +224,20 @@ export function CourseList() {
         emptyDescription={
           list.isFiltered
             ? 'Try widening the filters, or clear them to see everything.'
-            : 'Create the first course to get started.'
+            : canCreate
+              ? 'Create the first course to get started.'
+              : 'An administrator assigns courses to you. None have been assigned yet.'
         }
         emptyAction={
           list.isFiltered ? (
             <Button variant="secondary" size="sm" onClick={list.clear}>
               Clear filters
             </Button>
-          ) : (
+          ) : canCreate ? (
             <Button size="sm" onClick={() => setCreating(true)}>
               New course
             </Button>
-          )
+          ) : null
         }
         toolbar={
           <FilterBar
@@ -302,7 +312,14 @@ export function CourseList() {
         }
       />
 
-      <CreateCourseDialog open={creating} onClose={() => setCreating(false)} />
+      {/*
+        Not rendered at all for a teacher, rather than rendered closed: the
+        dialog fetches the teacher roster from an @AdminOnly() endpoint, and
+        there is no state from which they could open it.
+      */}
+      {canCreate ? (
+        <CreateCourseDialog open={creating} onClose={() => setCreating(false)} />
+      ) : null}
     </div>
   );
 }

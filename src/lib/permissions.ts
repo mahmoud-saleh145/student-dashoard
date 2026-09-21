@@ -17,6 +17,12 @@ export type Capability =
   | 'viewStatistics'
   | 'manageCatalog'
   | 'manageCourses'
+  // Creating a course and staffing one are administrative decisions, distinct
+  // from `manageCourses` — which a teacher holds for the courses assigned to
+  // them. `POST /admin/courses` and `POST /admin/courses/:id/teachers` are both
+  // `@AdminOnly()`, so offering either to a teacher would only produce a 403.
+  | 'createCourses'
+  | 'assignCourseTeachers'
   | 'viewAllCourses'
   | 'manageStudents'
   | 'manageTeachers'
@@ -43,6 +49,8 @@ const MATRIX: Record<DashboardRole, ReadonlySet<Capability>> = {
     'viewStatistics',
     'manageCatalog',
     'manageCourses',
+    'createCourses',
+    'assignCourseTeachers',
     'viewAllCourses',
     'manageStudents',
     'manageTeachers',
@@ -65,6 +73,8 @@ const MATRIX: Record<DashboardRole, ReadonlySet<Capability>> = {
     'viewStatistics',
     'manageCatalog',
     'manageCourses',
+    'createCourses',
+    'assignCourseTeachers',
     'viewAllCourses',
     'manageStudents',
     'manageTeachers',
@@ -90,6 +100,10 @@ const MATRIX: Record<DashboardRole, ReadonlySet<Capability>> = {
   // and the service then checks that this teacher is assigned to this course
   // with the right capability. The part *purchase report* is not: it is
   // `@AdminOnly()`, so it stays out.
+  //
+  // `manageCourses` without `createCourses` is the shape of the teacher role:
+  // they work on the courses an administrator created and assigned to them,
+  // and they cannot bring a new one into existence or change who teaches it.
   TEACHER: new Set<Capability>([
     'manageCourses',
     'manageCourseParts',

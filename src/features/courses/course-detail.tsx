@@ -14,6 +14,7 @@ import { CourseContentTab } from '@/features/courses/course-content-tab';
 import { CourseNotifyTab } from '@/features/courses/course-notify-tab';
 import { CoursePricingTab } from '@/features/courses/course-pricing-tab';
 import { CourseStudentsTab } from '@/features/courses/course-students-tab';
+import { CourseTeachersTab } from '@/features/courses/course-teachers-tab';
 import { useCourse, useCourseVisibility } from '@/features/courses/hooks';
 import { formatDate, formatMoney, formatNumber } from '@/lib/format';
 import { useSession } from '@/lib/session-context';
@@ -37,6 +38,7 @@ import { useSession } from '@/lib/session-context';
 export function CourseDetail({ courseId }: { courseId: string }) {
   const toast = useToast();
   const { isAdmin, can } = useSession();
+  const canAssignTeachers = can('assignCourseTeachers');
   const [tab, setTab] = useTabParam('content');
   const [pendingAction, setPendingAction] = useState<VisibilityAction | null>(null);
 
@@ -117,9 +119,11 @@ export function CourseDetail({ courseId }: { courseId: string }) {
             columns={3}
             items={[
               {
+                // `teacher.fullName`, not `fullName`: this endpoint returns the
+                // assignment rows with the account nested, unlike the list.
                 label: 'Teacher',
                 value:
-                  data.teachers.map((teacher) => teacher.fullName).join(', ') || '—',
+                  data.teachers.map((row) => row.teacher.fullName).join(', ') || '—',
               },
               {
                 label: 'Price',
@@ -160,6 +164,10 @@ export function CourseDetail({ courseId }: { courseId: string }) {
             // Parts sit beside Pricing rather than inside it: they change how
             // the course is *bought*, not what it costs.
             { id: 'parts', label: 'Parts' },
+            // Staffing is an administrative decision: the routes behind this
+            // tab are @AdminOnly(), so a teacher is not offered a door that
+            // only leads to a 403.
+            ...(canAssignTeachers ? [{ id: 'teachers', label: 'Teachers' }] : []),
           ]}
           active={tab}
           onChange={setTab}
@@ -200,6 +208,12 @@ export function CourseDetail({ courseId }: { courseId: string }) {
               canManage={can('manageCourseParts')}
             />
           </TabPanel>
+
+          {canAssignTeachers ? (
+            <TabPanel id="teachers" active={tab}>
+              <CourseTeachersTab courseId={courseId} teachers={data.teachers} />
+            </TabPanel>
+          ) : null}
         </div>
       </div>
 

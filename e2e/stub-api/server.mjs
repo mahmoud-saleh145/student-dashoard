@@ -864,6 +864,20 @@ const server = createServer(async (req, res) => {
     return fail(res, 403, 'INSUFFICIENT_ROLE', 'Your role does not allow this action.');
   }
 
+  // Some course routes are @AdminOnly() for one method while the others stay
+  // @StaffOnly(), so they cannot go in the prefix list above: a teacher lists
+  // and edits the courses assigned to them, but does not create a course and
+  // does not decide who teaches one.
+  const adminOnlyWrites = [
+    { method: 'POST', match: (p) => p === '/admin/courses' },
+    { method: 'POST', match: (p) => /^\/admin\/courses\/[^/]+\/teachers$/.test(p) },
+    { method: 'DELETE', match: (p) => /^\/admin\/courses\/[^/]+\/teachers\/[^/]+$/.test(p) },
+  ];
+
+  if (adminOnlyWrites.some((rule) => rule.method === method && rule.match(path)) && !isAdmin) {
+    return fail(res, 403, 'INSUFFICIENT_ROLE', 'Only administrators can perform this action.');
+  }
+
   if (path === '/auth/me') {
     return ok(res, {
       id: user.id,
@@ -879,6 +893,25 @@ const server = createServer(async (req, res) => {
 
   if (path === '/analytics/dashboard') return ok(res, DASHBOARD_STATS);
   if (path === '/analytics/revenue') return ok(res, { points: [] });
+
+  if (path === '/admin/courses' && method === 'POST') {
+    // Only an administrator reaches this — the gate above refused everyone
+    // else — and the teachers named in the body are assigned to the course.
+    const body = await readBody(req);
+    const teacherIds = Array.isArray(body.teacherIds) ? body.teacherIds : [];
+
+    return ok(res, {
+      ...COURSES[0],
+      id: 'course-created',
+      title: body.title ?? 'New course',
+      status: 'DRAFT',
+      teachers: teacherIds.map((id, index) => ({
+        id,
+        fullName: byId(id)?.fullName ?? 'Assigned teacher',
+        isLead: index === 0,
+      })),
+    });
+  }
 
   if (path === '/admin/courses') {
     // A teacher only ever sees their own — the same scoping the real service
@@ -1035,7 +1068,43 @@ const server = createServer(async (req, res) => {
   // Anchored with `$`, so these never shadow /admin/courses/:id/parts.
   const courseDetail = /^\/admin\/courses\/([^/]+)$/.exec(path);
   if (courseDetail && method === 'GET') {
-    return ok(res, COURSES.find((c) => c.id === courseDetail[1]) ?? COURSES[0]);
+    const course = COURSES.find((c) => c.id === courseDetail[1]) ?? COURSES[0];
+
+    // The real `detailForStaff` returns the CourseTeacher assignment rows with
+    // the account nested under `teacher` and the per-assignment permissions
+    // attached — a different shape from the flat `{ id, fullName, isLead }`
+    // the list returns. The stub matched the list shape, which hid the
+    // difference from these tests.
+    return ok(res, {
+      ...course,
+      teachers: course.teachers.map((t) => ({
+        teacherId: t.id,
+        isLead: t.isLead,
+        canEditContent: true,
+        canEditPricing: false,
+        canPublish: false,
+        canViewStudents: true,
+        canViewRevenue: t.isLead,
+        revenueSharePercent: null,
+        teacher: { id: t.id, fullName: t.fullName, avatarUrl: null },
+      })),
+    });
+  }
+
+  // --- course staffing (admins only; the gate above refused everyone else) --
+  const assignTeacher = /^\/admin\/courses\/([^/]+)\/teachers$/.exec(path);
+  if (assignTeacher && method === 'POST') {
+    const body = await readBody(req);
+    return ok(res, {
+      id: 'ct-new',
+      courseId: assignTeacher[1],
+      teacherId: body.teacherId,
+      isLead: body.isLead ?? false,
+    });
+  }
+
+  if (/^\/admin\/courses\/[^/]+\/teachers\/[^/]+$/.test(path) && method === 'DELETE') {
+    return ok(res, { ok: true });
   }
 
   if (/^\/admin\/courses\/[^/]+\/sections$/.test(path)) {

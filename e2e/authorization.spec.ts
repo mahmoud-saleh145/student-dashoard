@@ -12,6 +12,14 @@ import { expect, forbidPath, resetStub, test } from './fixtures';
  *     security model was CSS.
  */
 
+/**
+ * The proxy refuses a mutating request that does not carry these, as a
+ * cross-site form post could not. A test that omits them is answered by the
+ * CSRF check rather than by the authorization being tested.
+ */
+const DASHBOARD_HEADERS = { 'x-dashboard-request': '1' } as const;
+const DASHBOARD_POST = { ...DASHBOARD_HEADERS, 'content-type': 'application/json' } as const;
+
 test.beforeEach(async ({ page }) => {
   await resetStub(page);
 });
@@ -63,6 +71,83 @@ test.describe('teacher', () => {
     }
   });
 
+  test('is offered no way to create a course', async ({ page, signIn }) => {
+    await signIn('teacher');
+    await page.goto('/courses');
+
+    await expect(page.getByRole('heading', { name: 'My courses' })).toBeVisible();
+
+    // The course a teacher can work on is one an administrator assigned them.
+    await expect(page.getByRole('link', { name: 'Anatomy 101' })).toBeVisible();
+
+    // …and there is no entry point to making another. Checked across the whole
+    // page rather than just the header, because the empty state carries its
+    // own copy of this button.
+    await expect(page.getByRole('button', { name: /new course/i })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /create course/i })).toHaveCount(0);
+  });
+
+  test('creating a course is refused by the API, not just hidden', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('teacher');
+    await expect(page).toHaveURL(/\/$/);
+
+    // Called directly through the proxy, exactly as a hostile client would —
+    // including naming themselves as the teacher, which is the payload that
+    // would have granted them access to what they created.
+    //
+    // The dashboard header is sent deliberately. Without it the proxy's CSRF
+    // check answers first with its own 403, and the test would pass without
+    // the role gate ever running — a green that proves nothing about who may
+    // create a course. Asserting the *code*, not just the status, is what
+    // keeps the two refusals from being mistaken for each other.
+    const response = await page.request.post('/api/proxy/admin/courses', {
+      data: {
+        title: 'Self-made course',
+        teacherIds: ['user-teacher'],
+        enrollmentMethods: ['CODE'],
+        price: 100,
+      },
+      headers: DASHBOARD_POST,
+    });
+
+    expect(response.status()).toBe(403);
+    const body = (await response.json()) as { code: string };
+    expect(body.code).toBe('INSUFFICIENT_ROLE');
+  });
+
+  test('cannot change who teaches a course', async ({ page, signIn }) => {
+    await signIn('teacher');
+    await expect(page).toHaveURL(/\/$/);
+
+    const assign = await page.request.post('/api/proxy/admin/courses/course-1/teachers', {
+      data: { teacherId: 'user-teacher', canEditPricing: true },
+      headers: DASHBOARD_POST,
+    });
+    expect(assign.status()).toBe(403);
+    expect(((await assign.json()) as { code: string }).code).toBe('INSUFFICIENT_ROLE');
+
+    const remove = await page.request.delete(
+      '/api/proxy/admin/courses/course-1/teachers/user-teacher',
+      { headers: DASHBOARD_HEADERS },
+    );
+    expect(remove.status()).toBe(403);
+    expect(((await remove.json()) as { code: string }).code).toBe('INSUFFICIENT_ROLE');
+  });
+
+  test('opening an assigned course shows no Teachers tab', async ({ page, signIn }) => {
+    await signIn('teacher');
+    await page.goto('/courses/course-1');
+
+    // What they keep: the course and its content.
+    await expect(page.getByRole('tab', { name: 'Content' })).toBeVisible();
+
+    // What they do not get: staffing.
+    await expect(page.getByRole('tab', { name: 'Teachers' })).toHaveCount(0);
+  });
+
   test('a course list request returns only their own courses', async ({ page, signIn }) => {
     await signIn('teacher');
     await expect(page).toHaveURL(/\/$/);
@@ -77,6 +162,58 @@ test.describe('teacher', () => {
     for (const course of body.data.items) {
       expect(course.teachers.some((teacher) => teacher.id === 'user-teacher')).toBe(true);
     }
+  });
+});
+
+test.describe('course creation is the administrator\'s', () => {
+  test('an admin is offered the button and the API accepts the call', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    await page.goto('/courses');
+
+    await expect(page.getByRole('button', { name: 'New course' })).toBeVisible();
+
+    const response = await page.request.post('/api/proxy/admin/courses', {
+      data: {
+        title: 'Pharmacology',
+        teacherIds: ['user-teacher'],
+        enrollmentMethods: ['CODE'],
+        price: 300,
+      },
+      headers: DASHBOARD_POST,
+    });
+
+    expect(response.ok()).toBe(true);
+
+    // The course comes back assigned to the teacher the admin named, which is
+    // what puts it in that teacher's dashboard.
+    const body = (await response.json()) as {
+      data: { teachers: { id: string }[] };
+    };
+    expect(body.data.teachers.map((teacher) => teacher.id)).toEqual(['user-teacher']);
+  });
+
+  test('an admin can assign and unassign a teacher', async ({ page, signIn }) => {
+    await signIn('admin');
+    await page.goto('/courses/course-1');
+
+    await expect(page.getByRole('tab', { name: 'Teachers' })).toBeVisible();
+    await page.getByRole('tab', { name: 'Teachers' }).click();
+
+    await expect(page.getByRole('heading', { name: 'Assigned teachers' })).toBeVisible();
+
+    // Scoped to the panel: the name also appears in the course summary above,
+    // so an unscoped locator matches twice and fails on strict mode.
+    const panel = page.getByRole('tabpanel', { name: 'Teachers' });
+    await expect(panel.getByText('Tarek Teacher')).toBeVisible();
+
+    const assign = await page.request.post('/api/proxy/admin/courses/course-1/teachers', {
+      data: { teacherId: 'user-teacher' },
+      headers: DASHBOARD_POST,
+    });
+    expect(assign.ok()).toBe(true);
   });
 });
 

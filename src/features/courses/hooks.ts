@@ -15,7 +15,34 @@ import type {
 
 /** Course reads and writes. Every route here is `/admin/*` on the backend. */
 
-export interface CourseDetail extends CourseSummary {
+/**
+ * One row of `course.teachers` as `GET /admin/courses/:courseId` returns it.
+ *
+ * Note the shape: the staff detail endpoint returns the `CourseTeacher`
+ * assignment rows with the account nested under `teacher`, where the list
+ * endpoint flattens each one to `{ id, fullName, isLead }`. They are different
+ * shapes for the same idea and reading one as the other yields `undefined`
+ * rather than a type error, which is why `CourseDetail` restates the field
+ * instead of inheriting it from `CourseSummary`.
+ */
+export interface CourseTeacherRow {
+  teacherId: string;
+  isLead: boolean;
+  canEditContent: boolean;
+  canEditPricing: boolean;
+  canPublish: boolean;
+  canViewStudents: boolean;
+  canViewRevenue: boolean;
+  revenueSharePercent: number | null;
+  teacher: {
+    id: string;
+    fullName: string;
+    avatarUrl: string | null;
+  };
+}
+
+export interface CourseDetail extends Omit<CourseSummary, 'teachers'> {
+  teachers: CourseTeacherRow[];
   titleAr: string | null;
   shortDescription: string;
   description: string;
@@ -171,6 +198,52 @@ export function useCourseVisibility(courseId: string) {
       await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
     },
   });
+}
+
+/**
+ * The teaching roster for one course.
+ *
+ * `POST /admin/courses/:courseId/teachers` is an upsert: it adds a teacher who
+ * is not on the course and rewrites the per-assignment permissions of one who
+ * is. Both routes are `@AdminOnly()` and the service asserts the role again, so
+ * these hooks exist for administrators only — see the `assignCourseTeachers`
+ * capability.
+ *
+ * The permission flags are deliberately explicit rather than defaulted here.
+ * `canEditPricing` and `canPublish` are the two that let a teacher change what
+ * students pay and what they can see, and an admin assigning a course should
+ * be choosing them rather than inheriting them from a form they did not read.
+ */
+export interface CourseTeacherAssignment {
+  teacherId: string;
+  isLead?: boolean;
+  canEditContent?: boolean;
+  canEditPricing?: boolean;
+  canPublish?: boolean;
+  canViewStudents?: boolean;
+  canViewRevenue?: boolean;
+  revenueSharePercent?: number;
+}
+
+export function useAssignCourseTeacher(courseId: string) {
+  return useCourseMutation<CourseTeacherAssignment>(
+    (input) => api.post(`admin/courses/${courseId}/teachers`, input),
+    courseId,
+  );
+}
+
+/**
+ * Removes a teacher from a course.
+ *
+ * The backend refuses to remove the last one — a course with no teacher cannot
+ * be published and nobody could manage its content — so the caller should not
+ * offer this for a single-teacher course.
+ */
+export function useRemoveCourseTeacher(courseId: string) {
+  return useCourseMutation<{ teacherId: string }>(
+    ({ teacherId }) => api.delete(`admin/courses/${courseId}/teachers/${teacherId}`),
+    courseId,
+  );
 }
 
 export function useChangeCoursePrice(courseId: string) {
