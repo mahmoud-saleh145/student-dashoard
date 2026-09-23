@@ -78,13 +78,7 @@ export function WalletOverview() {
         }
       />
 
-      <div className="rounded-lg border border-info/30 bg-info-soft px-4 py-3 text-sm text-info">
-        <p className="font-medium">How money moves here</p>
-        <p className="mt-0.5">
-          Cash → recharge card → wallet credit → library purchase. Nothing on this screen
-          grants course access, and no course purchase ever debits a wallet.
-        </p>
-      </div>
+
 
       <Tabs
         tabs={[

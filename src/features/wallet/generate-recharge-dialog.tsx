@@ -44,7 +44,7 @@ const EMPTY = {
   discountType: 'NONE' as DiscountType,
   discountPercent: '',
   discountAmount: '',
-  count: '50',
+  count: '1',
   batchName: '',
   expiresAt: '',
   prefix: '',
@@ -310,7 +310,7 @@ export function GenerateRechargeDialog({
                 aria-describedby={describedBy}
                 value={form.batchName}
                 onChange={(event) => set('batchName', event.target.value)}
-                placeholder="e.g. Term 2 — Pharmacy kiosk"
+                placeholder="e.g. Term 2 "
               />
             )}
           </Field>

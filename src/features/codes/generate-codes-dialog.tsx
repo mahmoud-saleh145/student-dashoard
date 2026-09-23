@@ -63,7 +63,7 @@ export function GenerateCodesDialog({
   const [coursePartId, setCoursePartId] = useState('');
   const [teacherId, setTeacherId] = useState('');
   const [batchName, setBatchName] = useState('');
-  const [count, setCount] = useState('50');
+  const [count, setCount] = useState('1');
   const [price, setPrice] = useState('');
   const [prefix, setPrefix] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
@@ -157,9 +157,8 @@ export function GenerateCodesDialog({
       filename: exportFilename(result.batchName ?? `${result.targetName}-codes`),
       sheetName: 'Codes',
       title: `${result.targetName} — access codes`,
-      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${
-        expiresAt ? ` · expires ${expiresAt}` : ''
-      }`,
+      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${expiresAt ? ` · expires ${expiresAt}` : ''
+        }`,
       columns: [
         { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
         {
@@ -339,9 +338,8 @@ export function GenerateCodesDialog({
                       disabled={!courseId || sellableParts.length === 0}
                       options={sellableParts.map((part) => ({
                         value: part.id,
-                        label: `${part.title} — ${part.sectionCount} section${
-                          part.sectionCount === 1 ? '' : 's'
-                        }`,
+                        label: `${part.title} — ${part.sectionCount} section${part.sectionCount === 1 ? '' : 's'
+                          }`,
                       }))}
                     />
                   )}
