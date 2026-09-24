@@ -53,6 +53,23 @@ function useFocusTrap(
   ref: React.RefObject<HTMLElement | null>,
   onClose: () => void,
 ): void {
+  /**
+   * The close handler is read through a ref rather than closed over.
+   *
+   * Callers pass `onClose={() => setDialog(null)}` — a fresh function on every
+   * render — and the input inside the dialog is usually controlled by state in
+   * that same component. With `onClose` in the dependency array, the first
+   * keystroke re-rendered the caller, changed the handler's identity, tore this
+   * effect down and set it up again. Setup focuses `focusables()[0]`, and since
+   * the header (with its close button) precedes `children` in the DOM, focus
+   * jumped from the input to the X after a single character. Holding the
+   * handler in a ref lets the trap arm once per open instead of per keystroke.
+   */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!active) return;
 
@@ -75,7 +92,7 @@ function useFocusTrap(
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -106,7 +123,9 @@ function useFocusTrap(
       document.removeEventListener('keydown', onKeyDown, true);
       previous?.focus?.();
     };
-  }, [active, ref, onClose]);
+    // Deliberately not `onClose`: see the ref above. `ref` is a stable ref
+    // object, so this effect now runs exactly once per open and close.
+  }, [active, ref]);
 }
 
 function Portal({ children }: { children: ReactNode }) {

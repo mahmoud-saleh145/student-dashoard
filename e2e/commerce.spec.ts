@@ -72,11 +72,29 @@ test.describe('wallet', () => {
     await dialog.getByLabel('Percentage off').fill('25');
 
     // The stub computes 200 − 25% = 150 paid, and credits the full 200.
-    // Intl renders EGP as "EGP 150" in this locale — checked against the
-    // rendered page rather than assumed.
-    await expect(dialog.getByText('Student pays')).toBeVisible();
-    await expect(dialog.getByText(/EGP\s*150/)).toBeVisible();
-    await expect(dialog.getByText('Wallet credit')).toBeVisible();
+    //
+    // Asserted per tile rather than by searching the dialog for "EGP 150".
+    // That broad match was ambiguous by construction: with a batch of one card
+    // the totals line below carries the same figure, and with a batch of fifty
+    // it did not — so the test passed or failed on the default card count
+    // rather than on the pricing. Each tile is a named group, so each figure is
+    // asserted where it actually belongs.
+    const facePaid = dialog.getByRole('group', { name: 'Face value' });
+    const pays = dialog.getByRole('group', { name: 'Student pays' });
+    const credit = dialog.getByRole('group', { name: 'Wallet credit' });
+
+    await expect(facePaid).toContainText(/EGP\s*200/);
+    await expect(pays).toContainText(/EGP\s*150/);
+
+    // The point of the whole screen: a discount reduces the cash taken and
+    // leaves the credit issued at full face value. A build that discounted the
+    // credit too would still show "EGP 150" somewhere and pass the old check.
+    await expect(credit).toContainText(/EGP\s*200/);
+    await expect(credit).not.toContainText(/EGP\s*150/);
+
+    // And the discount is shown as a discount, not folded silently into the
+    // figure.
+    await expect(pays).toContainText(/−\s*EGP\s*50/);
   });
 
   test('separates revenue from credit issued', async ({ page, signIn }) => {

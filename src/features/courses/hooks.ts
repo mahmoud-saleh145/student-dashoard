@@ -43,6 +43,12 @@ export interface CourseTeacherRow {
 
 export interface CourseDetail extends Omit<CourseSummary, 'teachers'> {
   teachers: CourseTeacherRow[];
+  /** Flattened out of the join rows by `detailForStaff`. */
+  departments: { id: string; name: string; facultyId: string }[];
+  facultyId: string | null;
+  universityId: string | null;
+  academicYearId: string | null;
+  subjectId: string | null;
   titleAr: string | null;
   shortDescription: string;
   description: string;
@@ -161,6 +167,14 @@ export interface CourseFormValues {
   subjectId?: string;
   teacherIds: string[];
   leadTeacherId?: string;
+  /**
+   * Departments the course is offered to.
+   *
+   * On an update, omitting this leaves the existing links alone and `[]`
+   * clears them — the backend treats the two differently on purpose, so a
+   * partial edit cannot wipe a course's structure.
+   */
+  departmentIds?: string[];
   price?: number;
   isFree?: boolean;
   enrollmentMethods: string[];

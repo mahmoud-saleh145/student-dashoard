@@ -15,6 +15,7 @@ import { CourseNotifyTab } from '@/features/courses/course-notify-tab';
 import { CoursePricingTab } from '@/features/courses/course-pricing-tab';
 import { CourseStudentsTab } from '@/features/courses/course-students-tab';
 import { CourseTeachersTab } from '@/features/courses/course-teachers-tab';
+import { EditCourseDialog } from '@/features/courses/edit-course-dialog';
 import { useCourse, useCourseVisibility } from '@/features/courses/hooks';
 import { formatDate, formatMoney, formatNumber } from '@/lib/format';
 import { useSession } from '@/lib/session-context';
@@ -41,6 +42,7 @@ export function CourseDetail({ courseId }: { courseId: string }) {
   const canAssignTeachers = can('assignCourseTeachers');
   const [tab, setTab] = useTabParam('content');
   const [pendingAction, setPendingAction] = useState<VisibilityAction | null>(null);
+  const [editing, setEditing] = useState(false);
 
   const course = useCourse(courseId);
   const visibility = useCourseVisibility(courseId);
@@ -98,6 +100,9 @@ export function CourseDetail({ courseId }: { courseId: string }) {
         actions={
           isAdmin ? (
             <div className="flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={() => setEditing(true)}>
+                Edit course
+              </Button>
               {actions.map((action) => (
                 <Button
                   key={action.endpoint}
@@ -140,6 +145,18 @@ export function CourseDetail({ courseId }: { courseId: string }) {
               { label: 'University', value: data.university?.name ?? '—' },
               { label: 'College', value: data.faculty?.name ?? '—' },
               { label: 'Academic year', value: data.academicYear?.name ?? '—' },
+              {
+                label: 'Departments',
+                // `?? []` for the same reason `university?.name` is optional
+                // above: one missing field on this response must not take the
+                // whole page — and with it every tab — down. The contract
+                // itself is pinned by the backend's course-detail-contract
+                // spec, which is where a missing `departments` should fail.
+                value:
+                  (data.departments ?? []).length > 0
+                    ? (data.departments ?? []).map((department) => department.name).join(', ')
+                    : '—',
+              },
               { label: 'Subject', value: data.subject?.name ?? '—' },
               {
                 label: 'Published',
@@ -216,6 +233,12 @@ export function CourseDetail({ courseId }: { courseId: string }) {
           ) : null}
         </div>
       </div>
+
+      <EditCourseDialog
+        course={data}
+        open={editing}
+        onClose={() => setEditing(false)}
+      />
 
       <ConfirmDialog
         open={pendingAction !== null}

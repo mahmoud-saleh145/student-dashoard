@@ -133,6 +133,15 @@ const COURSES = [
     studentCount: 12,
     university: { id: 'uni-1', name: 'Cairo University', nameAr: 'جامعة القاهرة' },
     faculty: { id: 'fac-1', name: 'Medicine', nameAr: 'الطب' },
+    // `detailForStaff` flattens the CourseDepartment join rows into this.
+    // It was absent here, and the detail page reads `.length` on it — so the
+    // whole page threw and not one tab rendered. Exactly the shape of the
+    // `counts.sections` crash this stub was last corrected for: a response
+    // field the page depends on that the double did not have.
+    departments: [
+      { id: 'dep-1', name: 'Human Anatomy', facultyId: 'fac-1' },
+      { id: 'dep-2', name: 'Histology', facultyId: 'fac-1' },
+    ],
     academicYear: { id: 'year-1', name: 'First year', nameAr: 'الفرقة الأولى', order: 1 },
     subject: null,
     publishedAt: '2026-01-01T00:00:00.000Z',
@@ -939,6 +948,38 @@ const server = createServer(async (req, res) => {
       expiresIn: 3600,
       requiredHeaders: { 'Content-Type': body.contentType },
     });
+  }
+
+  // The bytes themselves. The dashboard no longer PUTs to storage from the
+  // browser — it posts here through its own origin, and the API streams the
+  // body on to the Library bucket. `/__storage__/` above stays for the
+  // presigned flow, which the backend still exposes.
+  //
+  // Refused to a teacher by the `/storage/uploads/library-document` prefix in
+  // the admin-only list, which this path sits under.
+  if (path === '/storage/uploads/library-document/content' && method === 'POST') {
+    let sizeBytes = 0;
+    await new Promise((resolve) => {
+      req.on('data', (chunk) => {
+        sizeBytes += chunk.length;
+      });
+      req.on('end', resolve);
+      req.on('error', resolve);
+    });
+
+    if (control.failUpload) {
+      return fail(res, 502, 'UPLOAD_FAILED', 'Storage refused the upload.');
+    }
+
+    const filename = url.searchParams.get('filename') ?? '';
+    const ext = filename.includes('.')
+      ? `.${filename.split('.').pop().toLowerCase()}`
+      : '.bin';
+
+    // The server names the key; the client never does. Same key the presigned
+    // route issues, so the assertion on what was sent to
+    // /library/materials/:id/parts does not depend on which path uploaded it.
+    return ok(res, { objectKey: `library/stub-object${ext}`, sizeBytes });
   }
 
   if (path === '/admin/codes/generate' && method === 'POST') {

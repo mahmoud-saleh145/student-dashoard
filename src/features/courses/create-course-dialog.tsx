@@ -2,6 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 
@@ -9,7 +10,11 @@ import { Button } from '@/components/ui/button';
 import { Checkbox, Field, Select, TextArea, TextInput } from '@/components/ui/field';
 import { Modal } from '@/components/ui/overlay';
 import { useToast } from '@/components/ui/toast';
-import { useAcademicYears, useSubjects, useUniversities } from '@/features/catalog/hooks';
+import {
+  AcademicStructurePicker,
+  type AcademicStructureValue,
+} from '@/features/catalog/academic-structure-picker';
+import { useAcademicYears, useSubjects } from '@/features/catalog/hooks';
 import { useCreateCourse } from '@/features/courses/hooks';
 import { useTeacherOptions } from '@/features/teachers/hooks';
 import { ApiError } from '@/lib/errors';
@@ -28,7 +33,9 @@ const schema = z
     titleAr: z.string().trim().max(200).optional().or(z.literal('')),
     shortDescription: z.string().trim().max(500).optional().or(z.literal('')),
     teacherId: z.string().min(1, 'Choose a teacher'),
-    universityId: z.string().optional().or(z.literal('')),
+    // University, college and departments are held outside the form schema:
+    // they cascade, so they are one value rather than three independent
+    // fields. See `AcademicStructurePicker`.
     academicYearId: z.string().optional().or(z.literal('')),
     subjectId: z.string().optional().or(z.literal('')),
     isFree: z.boolean(),
@@ -55,9 +62,10 @@ export function CreateCourseDialog({
   const createCourse = useCreateCourse();
 
   const teachers = useTeacherOptions();
-  const universities = useUniversities();
   const years = useAcademicYears();
   const subjects = useSubjects();
+
+  const [structure, setStructure] = useState<AcademicStructureValue>(EMPTY_STRUCTURE);
 
   const {
     register,
@@ -83,7 +91,11 @@ export function CreateCourseDialog({
         shortDescription: parsed.shortDescription || undefined,
         teacherIds: [parsed.teacherId],
         leadTeacherId: parsed.teacherId,
-        universityId: parsed.universityId || undefined,
+        universityId: structure.universityId || undefined,
+        facultyId: structure.facultyId || undefined,
+        // Sent even when empty, so the server records "no departments"
+        // explicitly rather than inferring it.
+        departmentIds: structure.departmentIds,
         academicYearId: parsed.academicYearId || undefined,
         subjectId: parsed.subjectId || undefined,
         isFree: parsed.isFree,
@@ -93,6 +105,7 @@ export function CreateCourseDialog({
 
       toast.success('Course created', 'It starts as a draft, so students cannot see it yet.');
       reset();
+      setStructure(EMPTY_STRUCTURE);
       onClose();
 
       const id = (created as { id?: string } | null)?.id;
@@ -179,21 +192,13 @@ export function CreateCourseDialog({
           )}
         </Field>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Field label="University">
-            {({ id }) => (
-              <Select
-                id={id}
-                placeholder="Not set"
-                options={(universities.data ?? []).map((university) => ({
-                  value: university.id,
-                  label: university.name,
-                }))}
-                {...register('universityId')}
-              />
-            )}
-          </Field>
+        <AcademicStructurePicker
+          value={structure}
+          onChange={setStructure}
+          disabled={createCourse.isPending}
+        />
 
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Academic year">
             {({ id }) => (
               <Select
@@ -254,3 +259,10 @@ export function CreateCourseDialog({
     </Modal>
   );
 }
+
+/** A course with no academic structure is valid; this is that. */
+const EMPTY_STRUCTURE: AcademicStructureValue = {
+  universityId: '',
+  facultyId: '',
+  departmentIds: [],
+};

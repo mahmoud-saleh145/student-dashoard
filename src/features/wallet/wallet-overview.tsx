@@ -78,7 +78,21 @@ export function WalletOverview() {
         }
       />
 
-
+      {/*
+        The one-paragraph statement of the money rule this whole screen exists
+        under, kept where an administrator reads it before acting rather than
+        in a doc they will not open. `commerce.spec.ts` asserts the sentence,
+        because the guarantee it describes — a wallet is never debited for
+        course access — is enforced server-side and would be silently
+        contradicted by a screen that implied otherwise.
+      */}
+      <div className="rounded-lg border border-info/30 bg-info-soft px-4 py-3 text-sm text-info">
+        <p className="font-medium">How money moves here</p>
+        <p className="mt-0.5">
+          Cash → recharge card → wallet credit → library purchase. Nothing on this screen
+          grants course access, and no course purchase ever debits a wallet.
+        </p>
+      </div>
 
       <Tabs
         tabs={[

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Field, Select, TextArea, TextInput } from '@/components/ui/field';
@@ -481,9 +481,20 @@ function Amount({
     credit: 'text-info',
   }[tone];
 
+  // The label and the figure were two unrelated paragraphs: a screen reader
+  // announced "Student pays" and "EGP 150" with nothing tying them together,
+  // and three tiles side by side made that genuinely ambiguous. Grouping them
+  // and naming the group from the visible label fixes that — and gives a test
+  // a way to assert *this* tile's figure rather than searching the dialog for
+  // an amount that may also appear in the totals line below.
+  const labelId = useId();
+
   return (
-    <div className="min-w-0">
-      <p className="truncate text-[11px] font-medium tracking-wide text-muted uppercase">
+    <div className="min-w-0" role="group" aria-labelledby={labelId}>
+      <p
+        id={labelId}
+        className="truncate text-[11px] font-medium tracking-wide text-muted uppercase"
+      >
         {label}
       </p>
       <p className={`mt-0.5 text-lg font-semibold tabular-nums ${colour}`}>

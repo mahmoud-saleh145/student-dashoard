@@ -138,16 +138,72 @@ export function useCreateAcademicYear() {
   );
 }
 
+export function useUpdateFaculty() {
+  return useCatalogMutation<{
+    id: string;
+    name?: string;
+    nameAr?: string;
+    sortOrder?: number;
+    isActive?: boolean;
+  }>(({ id, ...body }) => api.patch(`catalog/faculties/${id}`, body));
+}
+
+export function useUpdateDepartment() {
+  return useCatalogMutation<{
+    id: string;
+    name?: string;
+    nameAr?: string;
+    sortOrder?: number;
+    isActive?: boolean;
+  }>(({ id, ...body }) => api.patch(`catalog/departments/${id}`, body));
+}
+
+/**
+ * The catalogue rows, as the backend names them.
+ *
+ * Singular, deliberately. These hooks used to send the plural — `universities`
+ * — into a backend that switches on the singular, so the switch matched no
+ * case, fell through, and answered `{ ok: true }` without deactivating
+ * anything. The route now accepts both and refuses anything else, but sending
+ * the name it actually uses is the honest fix.
+ */
+export type CatalogEntity = 'university' | 'faculty' | 'department' | 'academicYear';
+
+/** What else points at a row, for the confirmation dialog to quote. */
+export interface CatalogDependents {
+  children: number;
+  students: number;
+}
+
+export function useCatalogDependents(entity: CatalogEntity, id: string | null) {
+  return useQuery({
+    queryKey: ['catalog', 'dependents', entity, id],
+    queryFn: () => api.get<CatalogDependents>(`catalog/${entity}/${id}/dependents`),
+    enabled: Boolean(id),
+    // Deliberately not cached: it is read at the moment of confirming, and a
+    // stale count is worse than a brief spinner.
+    staleTime: 0,
+  });
+}
+
 /**
  * Deactivates a catalogue entity.
  *
  * The backend has no hard delete here on purpose: students and courses point
  * at these rows, and removing one would orphan them. Deactivating hides it
- * from new selections while every existing reference keeps resolving.
+ * from new selections while every existing reference keeps resolving — which
+ * is also why it is reversible; see `useReactivateCatalogEntity`.
  */
 export function useDeactivateCatalogEntity() {
-  return useCatalogMutation<{ entity: 'universities' | 'faculties' | 'departments'; id: string }>(
-    ({ entity, id }) => api.delete(`catalog/${entity}/${id}`),
+  return useCatalogMutation<{ entity: CatalogEntity; id: string }>(({ entity, id }) =>
+    api.delete(`catalog/${entity}/${id}`),
+  );
+}
+
+/** Puts a deactivated row back into service. */
+export function useReactivateCatalogEntity() {
+  return useCatalogMutation<{ entity: CatalogEntity; id: string }>(({ entity, id }) =>
+    api.post(`catalog/${entity}/${id}/reactivate`, {}),
   );
 }
 
