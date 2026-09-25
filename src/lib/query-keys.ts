@@ -38,6 +38,14 @@ export const queryKeys = {
     analytics: (id: string, params: unknown) => ['courses', 'analytics', id, params] as const,
   },
 
+  videos: {
+    all: ['videos'] as const,
+    // Polled while a video is QUEUED or PROCESSING, so it is keyed on the
+    // video rather than the lesson: replacing a lecture's video reuses the
+    // same Video row, and a stale key would show the previous run's state.
+    status: (videoId: string) => ['videos', 'status', videoId] as const,
+  },
+
   lessons: {
     all: ['lessons'] as const,
     viewers: (lessonId: string, params: unknown) =>

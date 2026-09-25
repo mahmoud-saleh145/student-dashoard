@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://student-dashoard.vercel.app"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["content-type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]

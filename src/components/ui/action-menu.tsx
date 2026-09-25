@@ -72,7 +72,15 @@ export function ActionMenu({
   }, [open]);
 
   return (
-    <div className="relative" ref={container}>
+    // Clicks inside the menu never reach the row: tables with `onRowClick`
+    // (students, for one) otherwise opened the row's drawer on top of the
+    // action the reader chose.
+    <div
+      className="relative"
+      ref={container}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+    >
       <button
         ref={trigger}
         type="button"
@@ -129,13 +137,7 @@ export function ActionMenu({
 
 function DotsIcon(): ReactNode {
   return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="currentColor"
-      aria-hidden="true"
-    >
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       <circle cx="8" cy="3" r="1.5" />
       <circle cx="8" cy="8" r="1.5" />
       <circle cx="8" cy="13" r="1.5" />

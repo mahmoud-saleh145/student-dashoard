@@ -67,10 +67,7 @@ test.describe('library upload', () => {
     await expect(dialog.getByPlaceholder(/library\//)).toHaveCount(0);
   });
 
-  test('refuses to save a new document before a file is uploaded', async ({
-    page,
-    signIn,
-  }) => {
+  test('refuses to save a new document before a file is uploaded', async ({ page, signIn }) => {
     await signIn('admin');
     const dialog = await openAddDocument(page);
 
@@ -90,7 +87,14 @@ test.describe('library upload', () => {
     await dialog.locator('input[type="file"]').setInputFiles(PDF);
     await expect(dialog.getByText('Uploaded')).toBeVisible();
 
-    await dialog.getByRole('button', { name: 'Add document' }).click();
+    await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes('/api/proxy/admin/library/materials/') &&
+          r.request().method() === 'POST',
+      ),
+      dialog.getByRole('button', { name: 'Add document' }).click(),
+    ]);
 
     // Asserted on the request, not on the screen: the claim is that the
     // dashboard sent the server's key, and a rendered string cannot show that.
@@ -103,10 +107,7 @@ test.describe('library upload', () => {
     expect(sent.data.price).toBe(75);
   });
 
-  test('reports a failed upload and does not pretend it worked', async ({
-    page,
-    signIn,
-  }) => {
+  test('reports a failed upload and does not pretend it worked', async ({ page, signIn }) => {
     await signIn('admin');
     await page.request.get(`${STUB_API}/api/v1/__test__/fail-upload`);
 
@@ -171,7 +172,10 @@ test.describe('library upload', () => {
 
 async function openGenerate(page: Page) {
   await page.goto('/codes');
-  await page.getByRole('button', { name: /generate codes/i }).first().click();
+  await page
+    .getByRole('button', { name: /generate codes/i })
+    .first()
+    .click();
   return page.getByRole('dialog');
 }
 
@@ -222,7 +226,12 @@ test.describe('PART access cards', () => {
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('Part').selectOption('part-1');
     await dialog.getByLabel('How many cards').fill('10');
-    await dialog.getByRole('button', { name: /generate/i }).click();
+    // Wait for the request to land before asking the stub what it received —
+    // reading straight after the click raced the browser and flaked.
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/proxy/admin/codes/generate')),
+      dialog.getByRole('button', { name: /generate/i }).click(),
+    ]);
 
     const sent = await (
       await page.request.get(`${STUB_API}/api/v1/__test__/last-generate-codes`)
@@ -240,7 +249,12 @@ test.describe('PART access cards', () => {
 
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('How many cards').fill('5');
-    await dialog.getByRole('button', { name: /generate/i }).click();
+    // Wait for the request to land before asking the stub what it received —
+    // reading straight after the click raced the browser and flaked.
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/proxy/admin/codes/generate')),
+      dialog.getByRole('button', { name: /generate/i }).click(),
+    ]);
 
     const sent = await (
       await page.request.get(`${STUB_API}/api/v1/__test__/last-generate-codes`)
@@ -259,7 +273,12 @@ test.describe('PART access cards', () => {
     await dialog.getByLabel('What do these cards unlock?').selectOption('SECTION');
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('Section').selectOption('sec-1');
-    await dialog.getByRole('button', { name: /generate/i }).click();
+    // Wait for the request to land before asking the stub what it received —
+    // reading straight after the click raced the browser and flaked.
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/proxy/admin/codes/generate')),
+      dialog.getByRole('button', { name: /generate/i }).click(),
+    ]);
 
     const sent = await (
       await page.request.get(`${STUB_API}/api/v1/__test__/last-generate-codes`)
@@ -274,9 +293,9 @@ test.describe('PART access cards', () => {
     await signIn('admin');
     await page.goto('/codes');
 
-    await expect(
-      page.getByLabel('Target type').locator('option'),
-    ).toContainText(['Course part']);
+    await expect(page.getByLabel('Target type').locator('option')).toContainText([
+      'Course part',
+    ]);
   });
 
   test('code generation stays refused to a teacher', async ({ page, signIn }) => {

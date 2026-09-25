@@ -8,8 +8,11 @@ import { ExportButton } from '@/components/data/export-button';
 import { FilterBar, FilterSelect, SearchInput } from '@/components/data/filters';
 import { CourseStatusBadge } from '@/components/data/status';
 import { Button, ButtonLink } from '@/components/ui/button';
+import { ActionMenu } from '@/components/ui/action-menu';
+import { ReasonConfirmDialog } from '@/components/ui/overlay';
 import { Badge, PageHeader } from '@/components/ui/primitives';
-import { useCourses } from '@/features/courses/hooks';
+import { useToast } from '@/components/ui/toast';
+import { useCourses, useDeleteCourse } from '@/features/courses/hooks';
 import { useAcademicYears, useSubjects, useUniversities } from '@/features/catalog/hooks';
 import { CreateCourseDialog } from '@/features/courses/create-course-dialog';
 import { fetchAllPages } from '@/lib/api-client';
@@ -48,6 +51,24 @@ export function CourseList() {
   const canCreate = can('createCourses');
   const list = useListQuery({ filterKeys: FILTER_KEYS, defaultSort: undefined });
   const [creating, setCreating] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<CourseSummary | null>(null);
+  const deleteCourse = useDeleteCourse();
+  const toast = useToast();
+
+  async function runDelete(reason: string) {
+    if (!deleteTarget) return;
+    try {
+      await deleteCourse.mutateAsync({ courseId: deleteTarget.id, reason });
+      toast.success(
+        'Course deleted',
+        `“${deleteTarget.title}” was removed. Its business records were kept.`,
+      );
+    } catch (error) {
+      toast.error(error);
+    } finally {
+      setDeleteTarget(null);
+    }
+  }
 
   const universities = useUniversities();
   const years = useAcademicYears();
@@ -134,9 +155,26 @@ export function CourseList() {
       header: <span className="sr-only">Actions</span>,
       align: 'end',
       render: (course) => (
-        <ButtonLink href={`/courses/${course.id}`} size="sm" variant="secondary">
-          Open
-        </ButtonLink>
+        <div className="flex items-center justify-end gap-1.5">
+          <ButtonLink href={`/courses/${course.id}`} size="sm" variant="secondary">
+            Open
+          </ButtonLink>
+          {isAdmin ? (
+            <ActionMenu
+              label={`Actions for ${course.title}`}
+              items={[
+                {
+                  label: 'Delete course',
+                  danger: true,
+                  // A published course must be hidden or archived first; the
+                  // backend refuses it too, this just says so up front.
+                  disabled: course.status === 'PUBLISHED',
+                  onSelect: () => setDeleteTarget(course),
+                },
+              ]}
+            />
+          ) : null}
+        </div>
       ),
     },
   ];
@@ -157,7 +195,12 @@ export function CourseList() {
       value: (row) => (row.isFree ? 0 : (row.price?.amount ?? 0)),
       format: '#,##0.00',
     },
-    { header: 'Currency', key: 'currency', width: 10, value: (row) => row.price?.currency ?? 'EGP' },
+    {
+      header: 'Currency',
+      key: 'currency',
+      width: 10,
+      value: (row) => row.price?.currency ?? 'EGP',
+    },
     { header: 'Students', key: 'students', width: 12, value: (row) => row.studentCount },
     { header: 'Sections', key: 'sections', width: 12, value: (row) => row.counts.sections },
     { header: 'Lectures', key: 'lessons', width: 12, value: (row) => row.counts.lessons },
@@ -200,9 +243,7 @@ export function CourseList() {
                 Academic structure
               </ButtonLink>
             ) : null}
-            {canCreate ? (
-              <Button onClick={() => setCreating(true)}>New course</Button>
-            ) : null}
+            {canCreate ? <Button onClick={() => setCreating(true)}>New course</Button> : null}
           </>
         }
       />
@@ -320,6 +361,23 @@ export function CourseList() {
       {canCreate ? (
         <CreateCourseDialog open={creating} onClose={() => setCreating(false)} />
       ) : null}
+      <ReasonConfirmDialog
+        open={deleteTarget !== null}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={(reason) => void runDelete(reason)}
+        title={`Delete “${deleteTarget?.title ?? ''}”?`}
+        message={
+          <>
+            The course disappears from the dashboard and the app and cannot be restored here. It
+            is a soft delete: payments, revenue, enrollments, code redemptions and watch history
+            are kept, and unredeemed access codes for it are revoked. A course whose students
+            still have access must be archived first.
+          </>
+        }
+        confirmLabel="Delete course"
+        busy={deleteCourse.isPending}
+        reasonLabel="Why is this course being deleted?"
+      />
     </div>
   );
 }

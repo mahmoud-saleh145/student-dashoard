@@ -1,10 +1,11 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import { CourseStatusBadge } from '@/components/data/status';
 import { Button } from '@/components/ui/button';
-import { ConfirmDialog } from '@/components/ui/overlay';
+import { ConfirmDialog, ReasonConfirmDialog } from '@/components/ui/overlay';
 import { Badge, Card, DescriptionList, PageHeader } from '@/components/ui/primitives';
 import { CardsSkeleton, ErrorState } from '@/components/ui/states';
 import { Tabs, TabPanel, useTabParam } from '@/components/ui/tabs';
@@ -16,7 +17,12 @@ import { CoursePricingTab } from '@/features/courses/course-pricing-tab';
 import { CourseStudentsTab } from '@/features/courses/course-students-tab';
 import { CourseTeachersTab } from '@/features/courses/course-teachers-tab';
 import { EditCourseDialog } from '@/features/courses/edit-course-dialog';
-import { useCourse, useCourseVisibility } from '@/features/courses/hooks';
+import {
+  useCourse,
+  useCourseVisibility,
+  useDeleteCourse,
+  type CourseLifecycleAction,
+} from '@/features/courses/hooks';
 import { formatDate, formatMoney, formatNumber } from '@/lib/format';
 import { useSession } from '@/lib/session-context';
 
@@ -44,8 +50,11 @@ export function CourseDetail({ courseId }: { courseId: string }) {
   const [pendingAction, setPendingAction] = useState<VisibilityAction | null>(null);
   const [editing, setEditing] = useState(false);
 
+  const router = useRouter();
   const course = useCourse(courseId);
   const visibility = useCourseVisibility(courseId);
+  const deleteCourse = useDeleteCourse();
+  const [deleting, setDeleting] = useState(false);
 
   if (course.isLoading) {
     return (
@@ -70,9 +79,9 @@ export function CourseDetail({ courseId }: { courseId: string }) {
 
   const data = course.data;
 
-  async function runVisibility(action: VisibilityAction) {
+  async function runVisibility(action: VisibilityAction, reason?: string) {
     try {
-      await visibility.mutateAsync(action.endpoint);
+      await visibility.mutateAsync({ action: action.endpoint, reason });
       toast.success(action.successTitle, action.successBody);
     } catch (error) {
       toast.error(error);
@@ -81,15 +90,29 @@ export function CourseDetail({ courseId }: { courseId: string }) {
     }
   }
 
+  async function runDelete(reason: string) {
+    try {
+      const result = await deleteCourse.mutateAsync({ courseId, reason });
+      toast.success(
+        'Course deleted',
+        result.revokedCodes > 0
+          ? `${result.revokedCodes} unredeemed access code(s) were revoked. Payments and history were kept.`
+          : 'Payments, enrollments and watch history were kept.',
+      );
+      router.push('/courses');
+    } catch (error) {
+      toast.error(error);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   const actions = visibilityActionsFor(data.status);
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        breadcrumbs={[
-          { label: 'Courses', href: '/courses' },
-          { label: data.title },
-        ]}
+        breadcrumbs={[{ label: 'Courses', href: '/courses' }, { label: data.title }]}
         title={
           <span className="flex flex-wrap items-center gap-3">
             {data.title}
@@ -113,6 +136,15 @@ export function CourseDetail({ courseId }: { courseId: string }) {
                   {action.label}
                 </Button>
               ))}
+              {data.status !== 'PUBLISHED' ? (
+                <Button
+                  variant="danger"
+                  onClick={() => setDeleting(true)}
+                  disabled={deleteCourse.isPending}
+                >
+                  Delete course
+                </Button>
+              ) : null}
             </div>
           ) : null
         }
@@ -127,8 +159,7 @@ export function CourseDetail({ courseId }: { courseId: string }) {
                 // `teacher.fullName`, not `fullName`: this endpoint returns the
                 // assignment rows with the account nested, unlike the list.
                 label: 'Teacher',
-                value:
-                  data.teachers.map((row) => row.teacher.fullName).join(', ') || '—',
+                value: data.teachers.map((row) => row.teacher.fullName).join(', ') || '—',
               },
               {
                 label: 'Price',
@@ -234,14 +265,10 @@ export function CourseDetail({ courseId }: { courseId: string }) {
         </div>
       </div>
 
-      <EditCourseDialog
-        course={data}
-        open={editing}
-        onClose={() => setEditing(false)}
-      />
+      <EditCourseDialog course={data} open={editing} onClose={() => setEditing(false)} />
 
       <ConfirmDialog
-        open={pendingAction !== null}
+        open={pendingAction !== null && pendingAction.endpoint !== 'archive'}
         onCancel={() => setPendingAction(null)}
         onConfirm={() => pendingAction && void runVisibility(pendingAction)}
         title={pendingAction?.confirmTitle ?? ''}
@@ -250,12 +277,43 @@ export function CourseDetail({ courseId }: { courseId: string }) {
         variant={pendingAction?.variant === 'danger' ? 'danger' : 'primary'}
         busy={visibility.isPending}
       />
+
+      {/* Archive is audited with a reason, and the backend refuses it without one. */}
+      <ReasonConfirmDialog
+        open={pendingAction?.endpoint === 'archive'}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={(reason) => pendingAction && void runVisibility(pendingAction, reason)}
+        title={pendingAction?.confirmTitle ?? ''}
+        message={pendingAction?.confirmBody ?? ''}
+        confirmLabel="Archive"
+        busy={visibility.isPending}
+        reasonLabel="Why is this course being archived?"
+      />
+
+      <ReasonConfirmDialog
+        open={deleting}
+        onCancel={() => setDeleting(false)}
+        onConfirm={(reason) => void runDelete(reason)}
+        title={`Delete “${data.title}”?`}
+        message={
+          <>
+            The course disappears from the dashboard and the app and cannot be restored here. It
+            is a <strong className="text-foreground">soft delete</strong>: payments, revenue,
+            enrollments, code redemptions and watch history are kept, and every unredeemed
+            access code for it is revoked. A course whose students still have access must be
+            archived first.
+          </>
+        }
+        confirmLabel="Delete course"
+        busy={deleteCourse.isPending}
+        reasonLabel="Why is this course being deleted?"
+      />
     </div>
   );
 }
 
 interface VisibilityAction {
-  endpoint: 'publish' | 'unpublish' | 'archive' | 'restore';
+  endpoint: CourseLifecycleAction;
   label: string;
   variant: 'primary' | 'secondary' | 'danger';
   confirmTitle: string;

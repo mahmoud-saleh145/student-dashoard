@@ -5,12 +5,9 @@ import { useState } from 'react';
 import { AccountStatusBadge, EnrollmentStateBadge } from '@/components/data/status';
 import { Button } from '@/components/ui/button';
 import { Field, TextArea, TextInput } from '@/components/ui/field';
-import { ConfirmDialog, Drawer, Modal } from '@/components/ui/overlay';
-import {
-  Badge,
-  DescriptionList,
-  SectionTitle,
-} from '@/components/ui/primitives';
+import { ConfirmDialog, Drawer, Modal, ReasonConfirmDialog } from '@/components/ui/overlay';
+import { useDeleteAccount } from '@/features/teachers/hooks';
+import { Badge, DescriptionList, SectionTitle } from '@/components/ui/primitives';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui/states';
 import { Tabs, TabPanel } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
@@ -57,6 +54,8 @@ export function StudentDrawer({
   const setStatus = useSetStudentStatus();
   const resetBinding = useResetDeviceBinding();
   const notify = useNotifyStudent();
+  const deleteAccount = useDeleteAccount();
+  const [deleting, setDeleting] = useState(false);
 
   const data = student.data;
   const blocked = data?.status === 'SUSPENDED' || data?.status === 'DISABLED';
@@ -83,6 +82,22 @@ export function StudentDrawer({
       toast.error(error);
     } finally {
       setConfirming(null);
+    }
+  }
+
+  async function runDelete(reason: string) {
+    if (!studentId) return;
+    try {
+      await deleteAccount.mutateAsync({ userId: studentId, reason });
+      toast.success(
+        'Student deleted',
+        'They are signed out and cannot sign in. Their history was kept.',
+      );
+      setDeleting(false);
+      onClose();
+    } catch (error) {
+      toast.error(error);
+      setDeleting(false);
     }
   }
 
@@ -127,6 +142,10 @@ export function StudentDrawer({
                   Block account
                 </Button>
               )}
+
+              <Button variant="danger" onClick={() => setDeleting(true)}>
+                Delete student
+              </Button>
             </>
           ) : null
         }
@@ -175,8 +194,8 @@ export function StudentDrawer({
 
               <p className="mt-5 rounded-lg border border-border bg-surface-alt p-3 text-xs text-muted">
                 Passwords are stored as one-way hashes and are never retrievable — not here, not
-                anywhere in the API. If this student is locked out, set a new password from their
-                account; doing so signs them out of every session.
+                anywhere in the API. If this student is locked out, set a new password from
+                their account; doing so signs them out of every session.
               </p>
             </TabPanel>
 
@@ -209,7 +228,10 @@ export function StudentDrawer({
                       <DescriptionList
                         columns={2}
                         items={[
-                          { label: 'Device', value: session.device?.name ?? session.platform ?? '—' },
+                          {
+                            label: 'Device',
+                            value: session.device?.name ?? session.platform ?? '—',
+                          },
                           { label: 'Platform', value: session.platform ?? '—' },
                           { label: 'App version', value: session.appVersion ?? '—' },
                           {
@@ -343,10 +365,32 @@ export function StudentDrawer({
           )
         }
         confirmLabel={
-          confirming === 'block' ? 'Block' : confirming === 'unblock' ? 'Unblock' : 'Clear binding'
+          confirming === 'block'
+            ? 'Block'
+            : confirming === 'unblock'
+              ? 'Unblock'
+              : 'Clear binding'
         }
         variant={confirming === 'unblock' ? 'primary' : 'danger'}
         busy={setStatus.isPending || resetBinding.isPending}
+      />
+
+      <ReasonConfirmDialog
+        open={deleting}
+        onCancel={() => setDeleting(false)}
+        onConfirm={(reason) => void runDelete(reason)}
+        title={`Delete ${data?.fullName ?? 'this student'}?`}
+        message={
+          <>
+            <strong className="text-foreground">{data?.fullName}</strong>
+            {data ? ` (${formatPhone(data.phone)})` : ''} is signed out everywhere, can never
+            sign in again and disappears from the dashboard; the phone number becomes free to
+            register again. This is a soft delete — purchases, enrollments, wallet history and
+            watch history are kept. Unlike blocking, it cannot be undone from the dashboard.
+          </>
+        }
+        confirmLabel="Delete student"
+        busy={deleteAccount.isPending}
       />
 
       <Modal

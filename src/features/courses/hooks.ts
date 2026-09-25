@@ -7,6 +7,7 @@ import { queryKeys } from '@/lib/query-keys';
 import type { Paginated } from '@/types/api';
 import type {
   AttachmentRow,
+  ContentStatus,
   CourseStudentRow,
   CourseSummary,
   LessonRow,
@@ -81,18 +82,30 @@ export function useCourse(courseId: string) {
   });
 }
 
+/**
+ * The authoring view of a course: every section with every non-deleted
+ * lecture, whatever its status, each with its live video and video count.
+ * (`GET /admin/courses/:id/sections` — staff-scoped on the backend.)
+ */
 export function useCourseSections(courseId: string) {
   return useQuery({
     queryKey: queryKeys.courses.sections(courseId),
     queryFn: () => api.get<SectionRow[]>(`admin/courses/${courseId}/sections`),
     enabled: Boolean(courseId),
+    // While any lecture's video is moving through the pipeline, keep the
+    // badges and counts honest without the reader having to reload.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((section) =>
+        (section.lessons ?? []).some((lesson) =>
+          ['UPLOADING', 'QUEUED', 'PROCESSING'].includes(lesson.video?.status ?? ''),
+        ),
+      )
+        ? 8000
+        : false,
   });
 }
 
-export function useCourseStudents(
-  courseId: string,
-  query: Record<string, string | number>,
-) {
+export function useCourseStudents(courseId: string, query: Record<string, string | number>) {
   return useQuery({
     queryKey: queryKeys.courses.students(courseId, query),
     queryFn: () =>
@@ -137,8 +150,8 @@ export function useLessonAttachments(lessonId: string | null) {
 // Mutations
 // ---------------------------------------------------------------------------
 
-function useCourseMutation<TInput>(
-  perform: (input: TInput) => Promise<unknown>,
+function useCourseMutation<TInput, TResult = unknown>(
+  perform: (input: TInput) => Promise<TResult>,
   courseId?: string,
 ) {
   const queryClient = useQueryClient();
@@ -202,14 +215,60 @@ export function useUpdateCourse(courseId: string) {
  * access decision; the dashboard exposes it in those words so nobody has to
  * guess what "hide" costs an existing student.
  */
+export type CourseLifecycleAction = 'publish' | 'unpublish' | 'archive' | 'restore';
+
+/**
+ * The body each lifecycle route actually validates:
+ *
+ *   publish   — none
+ *   unpublish — `{ status: 'HIDDEN' }` (UnpublishCourseDto requires one of
+ *               DRAFT | HIDDEN | SUSPENDED; the dashboard's "Hide" is HIDDEN)
+ *   archive   — `{ reason }`, 3–500 characters (ArchiveCourseDto)
+ *   restore   — none
+ *
+ * Both unpublish and archive used to be sent without the required field, so
+ * the backend answered 422 and nothing changed — the "archive does not work"
+ * report.
+ */
 export function useCourseVisibility(courseId: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (action: 'publish' | 'unpublish' | 'archive' | 'restore') =>
-      api.post(`admin/courses/${courseId}/${action}`, action === 'archive' ? {} : undefined),
+    mutationFn: ({ action, reason }: { action: CourseLifecycleAction; reason?: string }) =>
+      api.post(
+        `admin/courses/${courseId}/${action}`,
+        action === 'archive'
+          ? { reason }
+          : action === 'unpublish'
+            ? { status: 'HIDDEN' }
+            : undefined,
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
+      // Enrollment states change with archive/restore.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
+    },
+  });
+}
+
+/**
+ * Deletes a course. Always a soft delete on the backend — payments,
+ * enrollments, codes and watch history are retained — and refused for a
+ * published course or one whose students still have access.
+ */
+export function useDeleteCourse() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ courseId, reason }: { courseId: string; reason: string }) =>
+      api.delete<{ id: string; deleted: boolean; revokedCodes: number }>(
+        `admin/courses/${courseId}`,
+        { reason },
+      ),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.codes.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
     },
   });
 }
@@ -291,15 +350,28 @@ export function useArchiveSection(courseId: string) {
   );
 }
 
+/**
+ * Creates a lecture and returns it.
+ *
+ * The created row — its `id` in particular — is what the caller needs: a video
+ * cannot be uploaded until the lecture exists, because `videos/uploads/init`
+ * takes a `lessonId`. The backend's `LessonsService.create` returns the whole
+ * row, so only the part this dashboard relies on is typed here.
+ */
 export function useCreateLesson(courseId: string) {
-  return useCourseMutation<{
-    sectionId: string;
-    title: string;
-    titleAr?: string;
-    description?: string;
-    kind?: string;
-    isPreview?: boolean;
-  }>(
+  return useCourseMutation<
+    {
+      sectionId: string;
+      title: string;
+      titleAr?: string;
+      description?: string;
+      kind?: string;
+      isPreview?: boolean;
+      /** The backend defaults a new lecture to DRAFT — invisible to students. */
+      status?: ContentStatus;
+    },
+    { id: string; title: string }
+  >(
     ({ sectionId, ...body }) => api.post(`admin/sections/${sectionId}/lessons`, body),
     courseId,
   );
@@ -310,12 +382,30 @@ export function useUpdateLesson(courseId: string) {
     lessonId: string;
     title?: string;
     description?: string;
-    status?: string;
+    status?: ContentStatus;
     isPreview?: boolean;
   }>(({ lessonId, ...body }) => api.patch(`admin/lessons/${lessonId}`, body), courseId);
 }
 
-export function useArchiveLesson(courseId: string) {
+/**
+ * Lecture visibility, through `PATCH /admin/lessons/:id { status }`.
+ *
+ *   PUBLISHED — students with access see and can play it
+ *   DRAFT     — hidden from students; how every new lecture starts
+ *   ARCHIVED  — retired but kept, reversible (restore → PUBLISHED)
+ *
+ * Archive used to be wired to DELETE, which is an irreversible soft delete
+ * with no way back from the dashboard. Archive and delete are now separate.
+ */
+export function useSetLessonStatus(courseId: string) {
+  return useCourseMutation<{ lessonId: string; status: ContentStatus }>(
+    ({ lessonId, status }) => api.patch(`admin/lessons/${lessonId}`, { status }),
+    courseId,
+  );
+}
+
+/** Soft delete (`DELETE /admin/lessons/:id`). Watch history is kept; not reversible here. */
+export function useDeleteLesson(courseId: string) {
   return useCourseMutation<{ lessonId: string }>(
     ({ lessonId }) => api.delete(`admin/lessons/${lessonId}`),
     courseId,

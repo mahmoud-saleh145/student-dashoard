@@ -11,14 +11,17 @@ import { FilterBar, FilterSelect, SearchInput } from '@/components/data/filters'
 import { AccountStatusBadge } from '@/components/data/status';
 import { Button } from '@/components/ui/button';
 import { Field, Select, TextInput } from '@/components/ui/field';
-import { ConfirmDialog, Modal } from '@/components/ui/overlay';
+import { ActionMenu } from '@/components/ui/action-menu';
+import { ConfirmDialog, Modal, ReasonConfirmDialog } from '@/components/ui/overlay';
 import { Avatar, PageHeader } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
+import { useSession } from '@/lib/session-context';
 import {
   useCreateTeacher,
   useResetPassword,
   useTeachers,
   useUpdateTeacher,
+  useDeleteAccount,
 } from '@/features/teachers/hooks';
 import { fetchAllPages } from '@/lib/api-client';
 import { ApiError } from '@/lib/errors';
@@ -50,6 +53,24 @@ export function TeacherList() {
   const [statusTarget, setStatusTarget] = useState<TeacherRow | null>(null);
 
   const updateTeacher = useUpdateTeacher();
+  const deleteAccount = useDeleteAccount();
+  const [deleteTarget, setDeleteTarget] = useState<TeacherRow | null>(null);
+  const { isMaster, isAdmin } = useSession();
+
+  async function runDelete(reason: string) {
+    if (!deleteTarget) return;
+    try {
+      await deleteAccount.mutateAsync({ userId: deleteTarget.id, reason });
+      toast.success(
+        'Teacher deleted',
+        `${deleteTarget.fullName} can no longer sign in. Their history was kept.`,
+      );
+    } catch (error) {
+      toast.error(error);
+    } finally {
+      setDeleteTarget(null);
+    }
+  }
 
   async function toggleStatus() {
     if (!statusTarget) return;
@@ -138,12 +159,25 @@ export function TeacherList() {
       align: 'end',
       render: (teacher) => (
         <div className="flex justify-end gap-1.5">
-          <Button size="sm" variant="ghost" onClick={() => setResetting(teacher)}>
-            Set password
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setStatusTarget(teacher)}>
-            {teacher.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
-          </Button>
+          <ActionMenu
+            label={`Actions for ${teacher.fullName}`}
+            items={[
+              { label: 'Set password', onSelect: () => setResetting(teacher) },
+              {
+                label: teacher.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate',
+                onSelect: () => setStatusTarget(teacher),
+              },
+              ...(isAdmin || isMaster
+                ? [
+                    {
+                      label: 'Delete teacher',
+                      danger: true,
+                      onSelect: () => setDeleteTarget(teacher),
+                    },
+                  ]
+                : []),
+            ]}
+          />
         </div>
       ),
     },
@@ -257,14 +291,16 @@ export function TeacherList() {
         onCancel={() => setStatusTarget(null)}
         onConfirm={toggleStatus}
         title={
-          statusTarget?.status === 'ACTIVE' ? 'Deactivate this teacher?' : 'Reactivate this teacher?'
+          statusTarget?.status === 'ACTIVE'
+            ? 'Deactivate this teacher?'
+            : 'Reactivate this teacher?'
         }
         message={
           statusTarget?.status === 'ACTIVE' ? (
             <>
-              <strong className="text-foreground">{statusTarget?.fullName}</strong> is signed out
-              and can no longer sign in. Their courses stay published and their students keep
-              their access — nothing about the content changes.
+              <strong className="text-foreground">{statusTarget?.fullName}</strong> is signed
+              out and can no longer sign in. Their courses stay published and their students
+              keep their access — nothing about the content changes.
             </>
           ) : (
             <>They will be able to sign in to the dashboard again.</>
@@ -273,6 +309,24 @@ export function TeacherList() {
         confirmLabel={statusTarget?.status === 'ACTIVE' ? 'Deactivate' : 'Reactivate'}
         variant={statusTarget?.status === 'ACTIVE' ? 'danger' : 'primary'}
         busy={updateTeacher.isPending}
+      />
+
+      <ReasonConfirmDialog
+        open={deleteTarget !== null}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={(reason) => void runDelete(reason)}
+        title={`Delete ${deleteTarget?.fullName ?? 'this teacher'}?`}
+        message={
+          <>
+            <strong className="text-foreground">{deleteTarget?.fullName}</strong>
+            {deleteTarget?.phone ? ` (${deleteTarget.phone})` : ''} is signed out and can never
+            sign in again; the account disappears from the dashboard. This is a soft delete:
+            revenue shares, course history and audit records are kept. A teacher who is the only
+            teacher on an active course cannot be deleted until another is assigned.
+          </>
+        }
+        confirmLabel="Delete teacher"
+        busy={deleteAccount.isPending}
       />
     </div>
   );
@@ -286,9 +340,12 @@ const createSchema = z
     phone: z
       .string()
       .trim()
-      .refine((value) => /^(?:\+?20|0020|0)?1[0125]\d{8}$/.test(value.replace(/[\s()-]/g, '')), {
-        message: 'Enter a valid Egyptian mobile number',
-      }),
+      .refine(
+        (value) => /^(?:\+?20|0020|0)?1[0125]\d{8}$/.test(value.replace(/[\s()-]/g, '')),
+        {
+          message: 'Enter a valid Egyptian mobile number',
+        },
+      ),
     email: z.string().trim().email('Enter a valid email').max(160).optional().or(z.literal('')),
     gender: z.enum(['MALE', 'FEMALE']).optional().or(z.literal('')),
     title: z.string().trim().max(120).optional().or(z.literal('')),
@@ -366,7 +423,12 @@ function CreateTeacherDialog({ open, onClose }: { open: boolean; onClose: () => 
       <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex flex-col gap-4">
         <Field label="Full name" error={errors.fullName?.message} required>
           {({ id, describedBy, invalid }) => (
-            <TextInput id={id} aria-describedby={describedBy} invalid={invalid} {...register('fullName')} />
+            <TextInput
+              id={id}
+              aria-describedby={describedBy}
+              invalid={invalid}
+              {...register('fullName')}
+            />
           )}
         </Field>
 

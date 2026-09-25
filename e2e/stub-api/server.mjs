@@ -86,12 +86,43 @@ const lastRequest = { generateCodes: null, libraryPart: null };
 const control = {
   /** Makes the storage PUT fail, for the upload-failure path. */
   failUpload: false,
+  // Arms the next transcode to fail, so the FAILED + retry path is testable.
+  failProcessing: false,
+  /**
+   * videoId -> { status, polls, willFail }.
+   *
+   * Transcoding is a real background job with no push channel, so the
+   * dashboard polls. The stub advances one step per poll — QUEUED →
+   * PROCESSING → READY — which exercises the polling rather than answering
+   * READY immediately and letting a broken poller pass.
+   */
+  videos: new Map(),
   /** When true, the next request with a valid token answers 401 once. */
   expireAccessTokenOnce: false,
   /** Endpoints that should answer 403 regardless of the caller. */
   forbid: new Set(),
   /** Every path the dashboard has asked for, in order. */
   requests: [],
+  /** lessonId -> status overrides and soft deletes, so lifecycle is observable. */
+  lessonStatus: new Map(),
+  deletedLessons: new Set(),
+  /** Videos deleted through DELETE /videos/:id. */
+  deletedVideos: new Set(),
+  /** courseId -> status after a lifecycle call. */
+  courseStatus: new Map(),
+  deletedCourses: new Set(),
+  deletedUsers: new Set(),
+  deviceRequests: [
+    {
+      id: 'dcr-1',
+      status: 'PENDING',
+      reason: 'New phone',
+      requestedDeviceName: 'Pixel 9',
+      createdAt: '2026-02-01T09:00:00.000Z',
+      user: { id: 'user-student', fullName: 'Sara Student', phone: '01000000003' },
+      requestedDevice: { platform: 'android', model: 'Pixel 9', appVersion: '1.0.0' },
+    },
+  ],
 };
 
 const CODES = [
@@ -666,6 +697,32 @@ function page(res, items) {
   });
 }
 
+/** Exactly the shape `VideosService.status` returns. */
+function videoDetail(videoId, status, processingError) {
+  const ready = status === 'READY';
+  return {
+    id: videoId,
+    lessonId: 'les-1',
+    courseId: 'course-1',
+    status,
+    durationSeconds: ready ? 1830 : null,
+    width: ready ? 1920 : null,
+    height: ready ? 1080 : null,
+    isEncrypted: false,
+    renditions: ready
+      ? [
+          { height: 360, width: 640, bitrateKbps: 800, sizeBytes: 45_000_000 },
+          { height: 720, width: 1280, bitrateKbps: 2400, sizeBytes: 130_000_000 },
+        ]
+      : [],
+    captions: [],
+    processingError,
+    processingStartedAt: status === 'QUEUED' ? null : '2026-02-01T10:00:00.000Z',
+    processedAt: ready ? '2026-02-01T10:06:00.000Z' : null,
+    sourceSizeBytes: 512_000_000,
+  };
+}
+
 function fail(res, status, code, message) {
   send(res, status, {
     success: false,
@@ -719,13 +776,26 @@ const server = createServer(async (req, res) => {
       control.failUpload = true;
       return ok(res, { armed: true });
     }
+    if (path === '/__test__/fail-processing') {
+      control.failProcessing = true;
+      return ok(res, { armed: true });
+    }
     if (path === '/__test__/reset') {
       control.failUpload = false;
+      control.failProcessing = false;
+      control.videos.clear();
       lastRequest.generateCodes = null;
       lastRequest.libraryPart = null;
       control.expireAccessTokenOnce = false;
       control.forbid.clear();
       control.requests.length = 0;
+      control.lessonStatus.clear();
+      control.deletedLessons.clear();
+      control.deletedVideos.clear();
+      control.courseStatus.clear();
+      control.deletedCourses.clear();
+      control.deletedUsers.clear();
+      for (const row of control.deviceRequests) row.status = 'PENDING';
       return ok(res, { reset: true });
     }
     if (path === '/__test__/expire-access-token') {
@@ -929,7 +999,12 @@ const server = createServer(async (req, res) => {
       user.role === 'TEACHER'
         ? COURSES.filter((course) => course.teachers.some((t) => t.id === user.id))
         : COURSES;
-    return page(res, rows);
+    return page(
+      res,
+      rows
+        .filter((course) => !control.deletedCourses.has(course.id))
+        .map((course) => ({ ...course, status: control.courseStatus.get(course.id) ?? course.status })),
+    );
   }
 
 
@@ -1109,7 +1184,8 @@ const server = createServer(async (req, res) => {
   // Anchored with `$`, so these never shadow /admin/courses/:id/parts.
   const courseDetail = /^\/admin\/courses\/([^/]+)$/.exec(path);
   if (courseDetail && method === 'GET') {
-    const course = COURSES.find((c) => c.id === courseDetail[1]) ?? COURSES[0];
+    const found = COURSES.find((c) => c.id === courseDetail[1]) ?? COURSES[0];
+    const course = { ...found, status: control.courseStatus.get(found.id) ?? found.status };
 
     // The real `detailForStaff` returns the CourseTeacher assignment rows with
     // the account nested under `teacher` and the per-assignment permissions
@@ -1148,11 +1224,292 @@ const server = createServer(async (req, res) => {
     return ok(res, { ok: true });
   }
 
-  if (/^\/admin\/courses\/[^/]+\/sections$/.test(path)) {
+  // The content tab reads lessons from the public course endpoint, which
+  // returns each section with its lessons already attached — see
+  // `course-content-tab.tsx`. Without this the lecture rows never rendered at
+  // all, which is why nothing here covered them.
+  const publicSections = /^\/courses\/([^/]+)\/sections$/.exec(path);
+  if (publicSections && method === 'GET') {
     return ok(res, [
-      { id: 'sec-1', title: 'Week 1', sortOrder: 1, status: 'PUBLISHED', lessonCount: 4 },
-      { id: 'sec-2', title: 'Week 2', sortOrder: 2, status: 'PUBLISHED', lessonCount: 3 },
+      {
+        id: 'sec-1',
+        title: 'Week 1',
+        sortOrder: 1,
+        status: 'PUBLISHED',
+        lessons: [
+          {
+            id: 'les-1',
+            sectionId: 'sec-1',
+            courseId: publicSections[1],
+            title: 'Skeletal system',
+            description: null,
+            kind: 'VIDEO',
+            sortOrder: 1,
+            status: 'PUBLISHED',
+            isPreview: false,
+            durationSeconds: 1830,
+            video: { id: 'vid-1', status: 'READY', durationSeconds: 1830 },
+          },
+          {
+            id: 'les-2',
+            sectionId: 'sec-1',
+            courseId: publicSections[1],
+            title: 'Muscles of the forearm',
+            description: null,
+            kind: 'VIDEO',
+            sortOrder: 2,
+            status: 'DRAFT',
+            isPreview: false,
+            durationSeconds: 0,
+            // No video: the case the dashboard had no way to resolve.
+            video: null,
+          },
+        ],
+      },
+      { id: 'sec-2', title: 'Week 2', sortOrder: 2, status: 'PUBLISHED', lessons: [] },
     ]);
+  }
+
+  const createLesson = /^\/admin\/sections\/([^/]+)\/lessons$/.exec(path);
+  if (createLesson && method === 'POST') {
+    const body = await readBody(req);
+    // The real LessonsService.create returns the whole row; the id is what the
+    // dialog needs, since a video cannot be uploaded before the lesson exists.
+    return ok(res, {
+      id: 'les-new',
+      sectionId: createLesson[1],
+      title: body.title,
+      description: body.description ?? null,
+      kind: body.kind ?? 'VIDEO',
+      sortOrder: 3,
+      status: 'DRAFT',
+      isPreview: false,
+      durationSeconds: 0,
+      video: null,
+    });
+  }
+
+  // --- video upload, three steps ------------------------------------------
+  //
+  // Step 2 is deliberately NOT here: the browser PUTs straight to
+  // `/__storage__/`, cross-origin, with a real preflight — the same shape as
+  // the R2 rule production needs. Proxying it would test a flow the product
+  // does not have.
+  if (path === '/videos/uploads/init' && method === 'POST') {
+    const body = await readBody(req);
+    const videoId = 'vid-upload';
+    const ext = String(body.filename ?? '').includes('.')
+      ? `.${String(body.filename).split('.').pop().toLowerCase()}`
+      : '.bin';
+
+    control.videos.set(videoId, { status: 'UPLOADING', polls: 0, willFail: false });
+
+    return ok(res, {
+      videoId,
+      uploadUrl: `http://127.0.0.1:${PORT}/__storage__/videos/${videoId}/source${ext}`,
+      objectKey: `videos/${videoId}/source${ext}`,
+      expiresIn: 21600,
+      // Signed over, so the client must send exactly this and nothing else.
+      requiredHeaders: { 'Content-Type': body.contentType },
+      completeUrl: `/api/v1/videos/${videoId}/complete`,
+    });
+  }
+
+  const completeVideo = /^\/videos\/([^/]+)\/complete$/.exec(path);
+  if (completeVideo && method === 'POST') {
+    const videoId = completeVideo[1];
+    control.videos.set(videoId, {
+      status: 'QUEUED',
+      polls: 0,
+      willFail: control.failProcessing,
+    });
+    return ok(res, { videoId, status: 'QUEUED', jobId: 'job-1' });
+  }
+
+  const videoStatus = /^\/videos\/([^/]+)\/status$/.exec(path);
+  if (videoStatus && method === 'GET') {
+    const videoId = videoStatus[1];
+    const state = control.videos.get(videoId);
+
+    // A video the test never uploaded — the seeded READY one on les-1.
+    if (!state) {
+      return ok(res, videoDetail(videoId, 'READY', null));
+    }
+
+    state.polls += 1;
+    if (state.status === 'QUEUED') state.status = 'PROCESSING';
+    else if (state.status === 'PROCESSING') {
+      state.status = state.willFail ? 'FAILED' : 'READY';
+    }
+
+    return ok(
+      res,
+      videoDetail(
+        videoId,
+        state.status,
+        state.status === 'FAILED' ? 'ffmpeg exited with code 1: no audio stream' : null,
+      ),
+    );
+  }
+
+  const retryVideo = /^\/videos\/([^/]+)\/retry$/.exec(path);
+  if (retryVideo && method === 'POST') {
+    const videoId = retryVideo[1];
+    // Retrying clears the armed failure, so the recovery path is reachable.
+    control.videos.set(videoId, { status: 'QUEUED', polls: 0, willFail: false });
+    return ok(res, { videoId, status: 'QUEUED', jobId: 'job-2' });
+  }
+
+  // The authoring view the content tab reads, in the shape the real
+  // SectionsService.listForCourse returns: every non-deleted lecture with its
+  // status, live video and video count. It carries the lifecycle changes made
+  // through PATCH/DELETE below, so a test can see a lecture archive and come
+  // back.
+  const staffSections = /^\/admin\/courses\/([^/]+)\/sections$/.exec(path);
+  if (staffSections && method === 'GET') {
+    const courseId = staffSections[1];
+    const lessons = [
+      {
+        id: 'les-1',
+        sectionId: 'sec-1',
+        courseId,
+        title: 'Skeletal system',
+        description: null,
+        kind: 'VIDEO',
+        sortOrder: 1,
+        status: 'PUBLISHED',
+        isPreview: false,
+        durationSeconds: 1830,
+        attachmentCount: 0,
+        video: { id: 'vid-1', status: 'READY', durationSeconds: 1830, processingError: null },
+      },
+      {
+        id: 'les-2',
+        sectionId: 'sec-1',
+        courseId,
+        title: 'Muscles of the forearm',
+        description: null,
+        kind: 'VIDEO',
+        sortOrder: 2,
+        status: 'DRAFT',
+        isPreview: false,
+        durationSeconds: 0,
+        attachmentCount: 0,
+        video: null,
+      },
+    ]
+      .filter((lesson) => !control.deletedLessons.has(lesson.id))
+      .map((lesson) => {
+        const video =
+          lesson.video && !control.deletedVideos.has(lesson.video.id) ? lesson.video : null;
+        return {
+          ...lesson,
+          status: control.lessonStatus.get(lesson.id) ?? lesson.status,
+          video,
+          videoCount: video ? 1 : 0,
+        };
+      });
+    return ok(res, [
+      {
+        id: 'sec-1',
+        courseId,
+        title: 'Week 1',
+        sortOrder: 1,
+        status: 'PUBLISHED',
+        unlocksAt: null,
+        _count: { lessons: lessons.length },
+        lessons,
+      },
+      {
+        id: 'sec-2',
+        courseId,
+        title: 'Week 2',
+        sortOrder: 2,
+        status: 'PUBLISHED',
+        unlocksAt: null,
+        _count: { lessons: 0 },
+        lessons: [],
+      },
+    ]);
+  }
+
+  // --- lecture lifecycle ----------------------------------------------------
+  const lessonById = /^\/admin\/lessons\/([^/]+)$/.exec(path);
+  if (lessonById && method === 'PATCH') {
+    const body = await readBody(req);
+    const allowed = ['DRAFT', 'PUBLISHED', 'HIDDEN', 'ARCHIVED'];
+    if (body.status !== undefined && !allowed.includes(body.status)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'status must be a valid ContentStatus');
+    }
+    if (body.status) control.lessonStatus.set(lessonById[1], body.status);
+    return ok(res, { id: lessonById[1], status: body.status });
+  }
+  if (lessonById && method === 'DELETE') {
+    control.deletedLessons.add(lessonById[1]);
+    return ok(res, { ok: true, preservedWatchRecords: 0 });
+  }
+
+  const videoById = /^\/videos\/([^/]+)$/.exec(path);
+  if (videoById && method === 'DELETE') {
+    control.deletedVideos.add(videoById[1]);
+    control.videos.delete(videoById[1]);
+    return ok(res, { ok: true });
+  }
+
+  // --- course lifecycle, validated the way the real DTOs validate ---------
+  // The stub used to accept any body here, which is how "archive sends {}"
+  // passed every test while the real API answered 422.
+  const lifecycle = /^\/admin\/courses\/([^/]+)\/(publish|unpublish|archive|restore)$/.exec(path);
+  if (lifecycle && method === 'POST') {
+    const body = await readBody(req);
+    const [, courseId, action] = lifecycle;
+    if (action === 'archive' && (typeof body.reason !== 'string' || body.reason.trim().length < 3)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'reason must be longer than or equal to 3 characters');
+    }
+    if (action === 'unpublish' && !['DRAFT', 'HIDDEN', 'SUSPENDED'].includes(body.status)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'status must be one of DRAFT, HIDDEN, SUSPENDED');
+    }
+    const next = { publish: 'PUBLISHED', unpublish: body.status, archive: 'ARCHIVED', restore: 'DRAFT' }[action];
+    control.courseStatus.set(courseId, next);
+    return ok(res, { id: courseId, status: next });
+  }
+
+  const courseDelete = /^\/admin\/courses\/([^/]+)$/.exec(path);
+  if (courseDelete && method === 'DELETE') {
+    const body = await readBody(req);
+    if (typeof body.reason !== 'string' || body.reason.trim().length < 3) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'reason must be longer than or equal to 3 characters');
+    }
+    const course = COURSES.find((c) => c.id === courseDelete[1]);
+    const status = control.courseStatus.get(courseDelete[1]) ?? course?.status;
+    if (status === 'PUBLISHED') {
+      return fail(res, 409, 'INVALID_STATE', 'A published course cannot be deleted. Hide or archive it first.');
+    }
+    control.deletedCourses.add(courseDelete[1]);
+    return ok(res, { id: courseDelete[1], deleted: true, mode: 'soft', revokedCodes: 2 });
+  }
+
+  // --- accounts --------------------------------------------------------------
+  const userDelete = /^\/admin\/users\/([^/]+)$/.exec(path);
+  if (userDelete && method === 'DELETE') {
+    const body = await readBody(req);
+    if (typeof body.reason !== 'string' || body.reason.trim().length < 3) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'reason must be longer than or equal to 3 characters');
+    }
+    control.deletedUsers.add(userDelete[1]);
+    return ok(res, { ok: true });
+  }
+
+  // --- device change requests ---------------------------------------------
+  if (path === '/admin/devices/change-requests' && method === 'GET') {
+    return page(res, control.deviceRequests.filter((r) => r.status === 'PENDING'));
+  }
+  const review = /^\/admin\/devices\/change-requests\/([^/]+)\/(approve|reject)$/.exec(path);
+  if (review && method === 'POST') {
+    const row = control.deviceRequests.find((r) => r.id === review[1]);
+    if (!row) return fail(res, 404, 'NOT_FOUND', 'No such request');
+    row.status = review[2] === 'approve' ? 'APPROVED' : 'REJECTED';
+    return ok(res, { id: row.id, status: row.status });
   }
 
   // --- course parts (staff, scoped per course by the real backend) --------
@@ -1249,8 +1606,53 @@ const server = createServer(async (req, res) => {
 
   if (path === '/admin/codes') return page(res, CODES);
   if (path === '/admin/code-batches') return page(res, []);
-  if (path === '/admin/users') return page(res, []);
-  if (path === '/admin/users/teachers') return page(res, []);
+  if (path === '/admin/users') {
+    return page(
+      res,
+      [
+        {
+          id: 'stu-1',
+          fullName: 'Sara Student',
+          phone: '01000000004',
+          email: null,
+          gender: 'FEMALE',
+          role: 'STUDENT',
+          status: 'ACTIVE',
+          avatarUrl: null,
+          lastLoginAt: null,
+          createdAt: '2026-01-05T00:00:00.000Z',
+          university: null,
+          faculty: null,
+          department: null,
+          academicYear: null,
+        },
+      ].filter((row) => !control.deletedUsers.has(row.id)),
+    );
+  }
+  if (path === '/admin/users/teachers') {
+    return page(
+      res,
+      [
+        {
+          id: 'tea-2',
+          fullName: 'Hany Teacher',
+          phone: '01000000006',
+          email: null,
+          gender: 'MALE',
+          status: 'ACTIVE',
+          avatarUrl: null,
+          title: 'Lecturer',
+          bio: null,
+          isPublic: true,
+          courseCount: 0,
+          publishedCourseCount: 0,
+          studentCount: 0,
+          lastLoginAt: null,
+          createdAt: '2026-01-05T00:00:00.000Z',
+        },
+      ].filter((row) => !control.deletedUsers.has(row.id)),
+    );
+  }
   if (path === '/admin/enrollments') return page(res, []);
   if (path === '/admin/support/tickets') return page(res, []);
   if (path === '/admin/support/counters') {

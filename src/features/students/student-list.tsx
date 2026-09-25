@@ -6,11 +6,16 @@ import { DataTable, type Column } from '@/components/data/data-table';
 import { ExportButton } from '@/components/data/export-button';
 import { FilterBar, FilterSelect, SearchInput } from '@/components/data/filters';
 import { AccountStatusBadge } from '@/components/data/status';
+import { ActionMenu } from '@/components/ui/action-menu';
+import { ReasonConfirmDialog } from '@/components/ui/overlay';
 import { Avatar, PageHeader } from '@/components/ui/primitives';
+import { useToast } from '@/components/ui/toast';
 import { Tabs, useTabParam } from '@/components/ui/tabs';
 import { useAcademicYears, useUniversities } from '@/features/catalog/hooks';
 import { useStudents } from '@/features/students/hooks';
+import { DeviceRequests } from '@/features/students/device-requests';
 import { StudentDrawer } from '@/features/students/student-drawer';
+import { useDeleteAccount } from '@/features/teachers/hooks';
 import { fetchAllPages } from '@/lib/api-client';
 import {
   EXCEL_DATE_FORMAT,
@@ -36,6 +41,24 @@ export function StudentList() {
   const [tab, setTab] = useTabParam('active');
   const list = useListQuery({ filterKeys: FILTER_KEYS });
   const [openStudentId, setOpenStudentId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<StudentRow | null>(null);
+  const deleteAccount = useDeleteAccount();
+  const toast = useToast();
+
+  async function runDelete(reason: string) {
+    if (!deleteTarget) return;
+    try {
+      await deleteAccount.mutateAsync({ userId: deleteTarget.id, reason });
+      toast.success(
+        'Student deleted',
+        `${deleteTarget.fullName} can no longer sign in. Their history was kept.`,
+      );
+    } catch (error) {
+      toast.error(error);
+    } finally {
+      setDeleteTarget(null);
+    }
+  }
 
   const universities = useUniversities();
   const years = useAcademicYears();
@@ -95,9 +118,7 @@ export function StudentList() {
       header: 'Gender',
       secondary: true,
       render: (student) => (
-        <span className="text-xs text-muted capitalize">
-          {student.gender.toLowerCase()}
-        </span>
+        <span className="text-xs text-muted capitalize">{student.gender.toLowerCase()}</span>
       ),
     },
     {
@@ -122,6 +143,20 @@ export function StudentList() {
         <span className="whitespace-nowrap text-xs text-muted">
           {formatDateTime(student.lastLoginAt)}
         </span>
+      ),
+    },
+    {
+      key: 'actions',
+      header: <span className="sr-only">Actions</span>,
+      align: 'end',
+      render: (student) => (
+        <ActionMenu
+          label={`Actions for ${student.fullName}`}
+          items={[
+            { label: 'Open', onSelect: () => setOpenStudentId(student.id) },
+            { label: 'Delete student', danger: true, onSelect: () => setDeleteTarget(student) },
+          ]}
+        />
       ),
     },
   ];
@@ -178,97 +213,118 @@ export function StudentList() {
         tabs={[
           { id: 'active', label: 'Student accounts' },
           { id: 'blocked', label: 'Blocked accounts' },
+          { id: 'devices', label: 'Device requests' },
         ]}
         active={tab}
         onChange={setTab}
       />
 
-      <DataTable
-        columns={columns}
-        rows={students.data?.items ?? []}
-        rowKey={(student) => student.id}
-        isLoading={students.isLoading}
-        error={students.error}
-        onRetry={() => void students.refetch()}
-        meta={students.data?.meta}
-        onPageChange={list.setPage}
-        onPageSizeChange={list.setPageSize}
-        onRowClick={(student) => setOpenStudentId(student.id)}
-        caption={tab === 'blocked' ? 'Blocked students' : 'Students'}
-        emptyTitle={
-          tab === 'blocked'
-            ? 'No blocked accounts'
-            : list.isFiltered
-              ? 'No students match these filters'
-              : 'No students yet'
-        }
-        emptyDescription={
-          tab === 'blocked'
-            ? 'Accounts you block appear here and can be unblocked at any time.'
-            : list.isFiltered
-              ? 'Try widening the filters.'
-              : 'Students appear here as soon as they register in the mobile app.'
-        }
-        toolbar={
-          <FilterBar
-            isFiltered={list.isFiltered}
-            onClear={list.clear}
-            actions={
-              <ExportButton
-                filename={exportFilename(tab === 'blocked' ? 'blocked-students' : 'students')}
-                sheetName="Students"
-                title={tab === 'blocked' ? 'Blocked students' : 'Students'}
-                subtitle={
-                  list.isFiltered
-                    ? 'Reflects the filters applied on screen.'
-                    : 'All students matching this tab.'
-                }
-                columns={exportColumns}
-                loadRows={(onProgress) =>
-                  fetchAllPages<StudentRow>(
-                    'admin/users',
-                    { ...query, role: 'STUDENT' },
-                    { onProgress },
-                  )
-                }
+      {tab === 'devices' ? <DeviceRequests /> : null}
+
+      {tab === 'devices' ? null : (
+        <DataTable
+          columns={columns}
+          rows={students.data?.items ?? []}
+          rowKey={(student) => student.id}
+          isLoading={students.isLoading}
+          error={students.error}
+          onRetry={() => void students.refetch()}
+          meta={students.data?.meta}
+          onPageChange={list.setPage}
+          onPageSizeChange={list.setPageSize}
+          onRowClick={(student) => setOpenStudentId(student.id)}
+          caption={tab === 'blocked' ? 'Blocked students' : 'Students'}
+          emptyTitle={
+            tab === 'blocked'
+              ? 'No blocked accounts'
+              : list.isFiltered
+                ? 'No students match these filters'
+                : 'No students yet'
+          }
+          emptyDescription={
+            tab === 'blocked'
+              ? 'Accounts you block appear here and can be unblocked at any time.'
+              : list.isFiltered
+                ? 'Try widening the filters.'
+                : 'Students appear here as soon as they register in the mobile app.'
+          }
+          toolbar={
+            <FilterBar
+              isFiltered={list.isFiltered}
+              onClear={list.clear}
+              actions={
+                <ExportButton
+                  filename={exportFilename(tab === 'blocked' ? 'blocked-students' : 'students')}
+                  sheetName="Students"
+                  title={tab === 'blocked' ? 'Blocked students' : 'Students'}
+                  subtitle={
+                    list.isFiltered
+                      ? 'Reflects the filters applied on screen.'
+                      : 'All students matching this tab.'
+                  }
+                  columns={exportColumns}
+                  loadRows={(onProgress) =>
+                    fetchAllPages<StudentRow>(
+                      'admin/users',
+                      { ...query, role: 'STUDENT' },
+                      { onProgress },
+                    )
+                  }
+                />
+              }
+            >
+              <SearchInput
+                value={list.q}
+                onChange={list.setSearch}
+                placeholder="Search name or phone…"
+                label="Search students"
               />
-            }
-          >
-            <SearchInput
-              value={list.q}
-              onChange={list.setSearch}
-              placeholder="Search name or phone…"
-              label="Search students"
-            />
 
-            <FilterSelect
-              label="University"
-              placeholder="Any university"
-              value={list.filters.universityId ?? ''}
-              onChange={(value) => list.setFilter('universityId', value)}
-              options={(universities.data ?? []).map((university) => ({
-                value: university.id,
-                label: university.name,
-              }))}
-            />
+              <FilterSelect
+                label="University"
+                placeholder="Any university"
+                value={list.filters.universityId ?? ''}
+                onChange={(value) => list.setFilter('universityId', value)}
+                options={(universities.data ?? []).map((university) => ({
+                  value: university.id,
+                  label: university.name,
+                }))}
+              />
 
-            <FilterSelect
-              label="Academic year"
-              placeholder="Any year"
-              value={list.filters.academicYearId ?? ''}
-              onChange={(value) => list.setFilter('academicYearId', value)}
-              options={(years.data ?? []).map((year) => ({
-                value: year.id,
-                label: year.name,
-              }))}
-            />
-          </FilterBar>
+              <FilterSelect
+                label="Academic year"
+                placeholder="Any year"
+                value={list.filters.academicYearId ?? ''}
+                onChange={(value) => list.setFilter('academicYearId', value)}
+                options={(years.data ?? []).map((year) => ({
+                  value: year.id,
+                  label: year.name,
+                }))}
+              />
+            </FilterBar>
+          }
+        />
+      )}
+
+      <StudentDrawer studentId={openStudentId} onClose={() => setOpenStudentId(null)} />
+
+      <ReasonConfirmDialog
+        open={deleteTarget !== null}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={(reason) => void runDelete(reason)}
+        title={`Delete ${deleteTarget?.fullName ?? 'this student'}?`}
+        message={
+          <>
+            <strong className="text-foreground">{deleteTarget?.fullName}</strong>
+            {deleteTarget ? ` (${formatPhone(deleteTarget.phone)})` : ''} is signed out
+            everywhere, can never sign in again and disappears from the dashboard; the phone
+            number becomes free to register again. This is a soft delete — purchases,
+            enrollments, wallet history and watch history are kept. To suspend reversibly, use
+            Block instead.
+          </>
         }
-      />
-
-      <StudentDrawer
-        studentId={openStudentId}
-        onClose={() => setOpenStudentId(null)}
+        confirmLabel="Delete student"
+        busy={deleteAccount.isPending}
       />
     </div>
   );

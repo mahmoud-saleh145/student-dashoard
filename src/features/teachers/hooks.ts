@@ -115,3 +115,28 @@ export function useTeacherEarnings(teacherId: string, params: Record<string, str
     enabled: Boolean(teacherId),
   });
 }
+
+/**
+ * Deletes a teacher or student account (`DELETE /admin/users/:id { reason }`).
+ *
+ * A soft delete on the backend: the account is disabled and marked deleted,
+ * every session, refresh token and playback grant is revoked, and the phone
+ * number is freed. Enrollments, payments, wallet history, revenue shares and
+ * audit rows are retained — the schema forbids removing them. The backend
+ * refuses to delete a teacher who is the only teacher on a live course.
+ */
+export function useDeleteAccount() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ userId, reason }: { userId: string; reason: string }) =>
+      api.delete<{ ok: boolean }>(`admin/users/${userId}`, { reason }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.teachers.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.students.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.courses.all }),
+      ]);
+    },
+  });
+}

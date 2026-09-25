@@ -1,13 +1,6 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 import { Button, type ButtonVariant } from '@/components/ui/button';
@@ -82,7 +75,9 @@ function useFocusTrap(
         node.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ),
-      ).filter((element) => element.offsetParent !== null || element === document.activeElement);
+      ).filter(
+        (element) => element.offsetParent !== null || element === document.activeElement,
+      );
 
     // Focus the first control, or the surface itself when there is nothing
     // focusable inside it yet (a drawer that is still loading).
@@ -335,6 +330,10 @@ export interface ConfirmDialogProps {
   cancelLabel?: string;
   variant?: ButtonVariant;
   busy?: boolean;
+  /** Blocks confirming until the caller's own inputs are valid. */
+  confirmDisabled?: boolean;
+  /** Extra content under the message — e.g. a required reason field. */
+  children?: ReactNode;
 }
 
 /**
@@ -354,6 +353,8 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'danger',
   busy,
+  confirmDisabled,
+  children,
 }: ConfirmDialogProps) {
   return (
     <Modal
@@ -367,14 +368,81 @@ export function ConfirmDialog({
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </Button>
-          <Button variant={variant} onClick={onConfirm} loading={busy}>
+          <Button
+            variant={variant}
+            onClick={onConfirm}
+            loading={busy}
+            disabled={confirmDisabled}
+          >
             {confirmLabel}
           </Button>
         </>
       }
     >
       <div className="text-sm text-muted">{message}</div>
+      {children ? <div className="mt-4">{children}</div> : null}
     </Modal>
+  );
+}
+
+/**
+ * A confirmation that records why.
+ *
+ * Archiving a course, deleting a course and deleting an account are all
+ * audited with a reason, and the backend refuses the request without one
+ * (3–500 characters). Asking for it here is what makes those actions work at
+ * all — the dashboard used to post `{}` and every archive failed validation.
+ */
+export function ReasonConfirmDialog({
+  open,
+  onCancel,
+  onConfirm,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  variant = 'danger',
+  busy,
+  reasonLabel = 'Reason',
+  reasonPlaceholder = 'Recorded in the audit log',
+}: Omit<ConfirmDialogProps, 'onConfirm' | 'confirmDisabled' | 'children'> & {
+  onConfirm: (reason: string) => void;
+  reasonLabel?: string;
+  reasonPlaceholder?: string;
+}) {
+  const [reason, setReason] = useState('');
+  const id = useId();
+  const trimmed = reason.trim();
+
+  useEffect(() => {
+    if (!open) setReason('');
+  }, [open]);
+
+  return (
+    <ConfirmDialog
+      open={open}
+      onCancel={onCancel}
+      onConfirm={() => trimmed.length >= 3 && onConfirm(trimmed)}
+      title={title}
+      message={message}
+      confirmLabel={confirmLabel}
+      variant={variant}
+      busy={busy}
+      confirmDisabled={trimmed.length < 3}
+    >
+      <label htmlFor={id} className="mb-1.5 block text-sm font-medium text-foreground">
+        {reasonLabel} <span className="text-danger">*</span>
+      </label>
+      <textarea
+        id={id}
+        value={reason}
+        onChange={(event) => setReason(event.target.value)}
+        placeholder={reasonPlaceholder}
+        maxLength={500}
+        rows={3}
+        className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+      />
+      <p className="mt-1 text-xs text-muted">At least 3 characters.</p>
+    </ConfirmDialog>
   );
 }
 

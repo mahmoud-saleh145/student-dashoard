@@ -268,6 +268,10 @@ export interface SectionRow {
   status: ContentStatus;
   unlocksAt: string | null;
   lessonCount?: number;
+  /** `GET /admin/courses/:id/sections` counts non-deleted lectures here. */
+  _count?: { lessons: number };
+  /** Every non-deleted lecture, any status — the staff authoring view. */
+  lessons?: LessonRow[];
 }
 
 export interface LessonRow {
@@ -281,7 +285,15 @@ export interface LessonRow {
   status: ContentStatus;
   isPreview: boolean;
   durationSeconds: number;
-  video?: { id: string; status: VideoStatus; durationSeconds: number } | null;
+  /** The lecture's live video; a deleted one is reported as null. */
+  video?: {
+    id: string;
+    status: VideoStatus;
+    durationSeconds: number;
+    processingError?: string | null;
+  } | null;
+  /** From the lesson→video relation (0 or 1: a lecture holds one video). */
+  videoCount?: number;
   attachmentCount?: number;
 }
 
