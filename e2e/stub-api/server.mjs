@@ -81,11 +81,13 @@ const byId = (id) => Object.values(USERS).find((user) => user.id === id) ?? null
  * string — "the dashboard sent coursePartId" is the claim that matters, and
  * reading it back off the screen would not prove it.
  */
-const lastRequest = { generateCodes: null, libraryPart: null };
+const lastRequest = { generateCodes: null, libraryPart: null, materialPatch: null };
 
 const control = {
   /** Makes the storage PUT fail, for the upload-failure path. */
   failUpload: false,
+  /** Library material status, mutated by PATCH so publishing is a real round trip. */
+  materialStatus: 'PUBLISHED',
   // Arms the next transcode to fail, so the FAILED + retry path is testable.
   failProcessing: false,
   /**
@@ -780,8 +782,19 @@ const server = createServer(async (req, res) => {
       control.failProcessing = true;
       return ok(res, { armed: true });
     }
+    if (path === '/__test__/material-status') {
+      // Lets a test start from DRAFT, the state a real new material is in.
+      const next = url.searchParams.get('status');
+      if (next) control.materialStatus = next;
+      return ok(res, { status: control.materialStatus });
+    }
+    if (path === '/__test__/last-material-patch') {
+      return ok(res, lastRequest.materialPatch ?? {});
+    }
     if (path === '/__test__/reset') {
       control.failUpload = false;
+      control.materialStatus = 'PUBLISHED';
+      lastRequest.materialPatch = null;
       control.failProcessing = false;
       control.videos.clear();
       lastRequest.generateCodes = null;
@@ -1525,11 +1538,22 @@ const server = createServer(async (req, res) => {
   }
 
   // --- library (admin only) -----------------------------------------------
+  //
+  // Material status is held in `control.materialStatus` rather than baked into
+  // the fixture, because publishing is a round trip: the dashboard PATCHes a
+  // status and then re-reads the material. A constant fixture would answer
+  // PUBLISHED before the PATCH and hide a client that never sent one.
   if (path === '/admin/library/materials' && method === 'GET') {
-    return page(res, LIBRARY_MATERIALS);
+    return page(
+      res,
+      LIBRARY_MATERIALS.map((m) =>
+        m.id === 'mat-1' ? { ...m, status: control.materialStatus } : m,
+      ),
+    );
   }
   if (path === '/admin/library/materials' && method === 'POST') {
-    return ok(res, LIBRARY_MATERIAL_DETAIL);
+    // A new material is DRAFT, exactly as `@default(DRAFT)` makes it.
+    return ok(res, { ...LIBRARY_MATERIAL_DETAIL, id: 'mat-new', status: 'DRAFT' });
   }
   if (path === '/admin/library/purchases') {
     return send(res, 200, {
@@ -1542,8 +1566,19 @@ const server = createServer(async (req, res) => {
     return ok(res, LIBRARY_MATERIAL_DETAIL);
   }
 
+  const materialDetail = /^\/admin\/library\/materials\/([^/]+)$/.exec(path);
+  if (materialDetail && method === 'PATCH') {
+    const body = await readBody(req);
+    lastRequest.materialPatch = body;
+    // Only `status` is modelled here; the real service persists the whole
+    // patch. What matters for these tests is that the status the dashboard
+    // sent is the status the next read returns.
+    if (body.status) control.materialStatus = body.status;
+    return ok(res, { ...LIBRARY_MATERIAL_DETAIL, status: control.materialStatus });
+  }
+
   if (/^\/admin\/library\/materials\/[^/]+(\/parts)?$/.test(path)) {
-    return ok(res, LIBRARY_MATERIAL_DETAIL);
+    return ok(res, { ...LIBRARY_MATERIAL_DETAIL, status: control.materialStatus });
   }
   if (/^\/admin\/library\/(parts|packages)(\/[^/]+)?$/.test(path)) {
     return ok(res, LIBRARY_MATERIAL_DETAIL);

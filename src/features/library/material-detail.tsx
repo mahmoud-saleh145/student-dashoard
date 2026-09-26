@@ -10,13 +10,77 @@ import { EmptyState, QueryState, Skeleton } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import { formatBytes, formatMoney, formatNumber } from '@/lib/format';
 import type { LibraryPackageRow, LibraryPartRow } from '@/types/commerce';
+import type { ContentStatus } from '@/types/domain';
 
 import { LibraryPartDialog, MaterialDialog, PackageDialog } from './library-dialogs';
 import {
   useLibraryMaterial,
   useRemoveLibraryPackage,
   useRemoveLibraryPart,
+  useUpdateMaterial,
 } from './hooks';
+
+/**
+ * Publishing a material.
+ *
+ * A material is created `DRAFT` (`@default(DRAFT)` on the Prisma model) and the
+ * student-facing routes require exactly `PUBLISHED`: `browse` and
+ * `materialForStudent` both filter on it, and `assertOnSale` refuses a purchase
+ * against a draft. So until an administrator publishes it, a material is
+ * complete, paid-for work that no student can see — and this screen had no way
+ * to do it.
+ *
+ * Unpublishing returns it to `DRAFT` rather than `HIDDEN`. That is deliberate:
+ * `HIDDEN` hides a material from `browse` while `assertOnSale` still permits
+ * buying it by id, which is a state nothing in this interface should be able to
+ * create. `DRAFT` is refused by both.
+ *
+ * Existing purchases are untouched either way. A student who already bought a
+ * document keeps it — `issueTicket` only withdraws readability for `ARCHIVED`
+ * or deleted material, never for a draft.
+ */
+interface PublishAction {
+  status: ContentStatus;
+  label: string;
+  variant: 'primary' | 'secondary';
+  confirmTitle: string;
+  confirmBody: string;
+  successTitle: string;
+  successBody: string;
+}
+
+function publishActionFor(status: ContentStatus, partCount: number): PublishAction | null {
+  if (status === 'PUBLISHED') {
+    return {
+      status: 'DRAFT',
+      label: 'Unpublish',
+      variant: 'secondary',
+      confirmTitle: 'Unpublish this material?',
+      confirmBody:
+        'It stops appearing in the student library and can no longer be bought. Students who already bought a document from it keep it and can still open it — unpublishing is not the same as withdrawing.',
+      successTitle: 'Material unpublished',
+      successBody: 'It is back to draft and hidden from students.',
+    };
+  }
+
+  // Nothing in this interface produces ARCHIVED, but the enum allows it and an
+  // archived material must not be publishable straight back from here: that is
+  // a lifecycle decision with its own consequences for readers.
+  if (status === 'ARCHIVED') return null;
+
+  return {
+    status: 'PUBLISHED',
+    label: 'Publish',
+    variant: 'primary',
+    confirmTitle: 'Publish this material?',
+    confirmBody:
+      partCount === 0
+        ? 'It will be listed in the student library — but it has no documents yet, so students will find it empty. Add at least one document first unless you mean to publish a placeholder.'
+        : 'It will be listed in the student library, and its documents can be bought with wallet credit.',
+    successTitle: 'Material published',
+    successBody: 'Students can now find it in the library.',
+  };
+}
 
 /**
  * One material, with its documents and packages.
@@ -32,6 +96,7 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
 
   const removePart = useRemoveLibraryPart();
   const removePackage = useRemoveLibraryPackage();
+  const updateMaterial = useUpdateMaterial(materialId);
 
   const [editingMaterial, setEditingMaterial] = useState(false);
   const [partDialog, setPartDialog] = useState<{ open: boolean; part: LibraryPartRow | null }>(
@@ -44,6 +109,7 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
 
   const [deletingPart, setDeletingPart] = useState<LibraryPartRow | null>(null);
   const [deletingPackage, setDeletingPackage] = useState<LibraryPackageRow | null>(null);
+  const [pendingPublish, setPendingPublish] = useState<PublishAction | null>(null);
 
   const data = material.data;
   const parts = data?.parts ?? [];
@@ -52,6 +118,23 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
   const priceTotal = parts
     .filter((part) => !part.isPreview)
     .reduce((sum, part) => sum + part.price, 0);
+
+  const publishAction = data ? publishActionFor(data.status, parts.length) : null;
+
+  async function runPublish(action: PublishAction) {
+    try {
+      // The existing PATCH contract already accepts `status` and the service
+      // stamps `publishedAt` the first time it goes live, so this needs no new
+      // endpoint. `useUpdateMaterial` invalidates the whole library domain,
+      // which is what refreshes the badge here and the row in the list.
+      await updateMaterial.mutateAsync({ status: action.status });
+      toast.success(action.successTitle, action.successBody);
+    } catch (error) {
+      toast.error(error, 'The material status was not changed');
+    } finally {
+      setPendingPublish(null);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -66,6 +149,15 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
         actions={
           data ? (
             <>
+              {publishAction ? (
+                <Button
+                  variant={publishAction.variant}
+                  onClick={() => setPendingPublish(publishAction)}
+                  disabled={updateMaterial.isPending}
+                >
+                  {publishAction.label}
+                </Button>
+              ) : null}
               <Button variant="secondary" onClick={() => setEditingMaterial(true)}>
                 Edit material
               </Button>
@@ -333,6 +425,21 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
             </>
           )
         }
+      />
+
+      <ConfirmDialog
+        open={pendingPublish !== null}
+        onCancel={() => setPendingPublish(null)}
+        onConfirm={() => {
+          if (pendingPublish) void runPublish(pendingPublish);
+        }}
+        busy={updateMaterial.isPending}
+        title={pendingPublish?.confirmTitle ?? ''}
+        confirmLabel={pendingPublish?.label ?? 'Confirm'}
+        // Same mapping course-detail.tsx uses: only a genuinely destructive
+        // action gets the danger button, and unpublishing revokes nothing.
+        variant="primary"
+        message={pendingPublish?.confirmBody ?? ''}
       />
 
       <ConfirmDialog

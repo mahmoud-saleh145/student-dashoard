@@ -21,6 +21,16 @@ test.beforeEach(async ({ page }) => {
   await resetStub(page);
 });
 
+const STUB_API = `http://127.0.0.1:${process.env.STUB_API_PORT ?? 4599}`;
+
+/** The CSRF pair the proxy requires on every mutating request. */
+const DASHBOARD_HEADERS = { 'x-dashboard-request': '1' };
+
+/** Puts the stub's material into a known status before the page loads it. */
+async function setMaterialStatus(page: Page, status: 'DRAFT' | 'PUBLISHED') {
+  await page.request.get(`${STUB_API}/api/v1/__test__/material-status?status=${status}`);
+}
+
 // ---------------------------------------------------------------------------
 // Wallet
 // ---------------------------------------------------------------------------
@@ -226,6 +236,122 @@ test.describe('library', () => {
     // package that contains it, so the role is what disambiguates.
     await expect(page.getByRole('heading', { name: 'Paper 1' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Full bundle' })).toBeVisible();
+  });
+
+  // -------------------------------------------------------------------------
+  // Publishing
+  //
+  // A material is created DRAFT, and every student-facing route requires
+  // exactly PUBLISHED — `browse` and `materialForStudent` filter on it and
+  // `assertOnSale` refuses a draft purchase. Before this existed the dashboard
+  // could show the DRAFT badge but never change it, so finished material was
+  // permanently invisible to students.
+  // -------------------------------------------------------------------------
+
+  test('a draft material offers Publish', async ({ page, signIn }) => {
+    await signIn('admin');
+    await setMaterialStatus(page, 'DRAFT');
+    await page.goto('/library/mat-1');
+
+    await expect(page.getByText('Draft')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Unpublish' })).toHaveCount(0);
+  });
+
+  test('publishing sends PUBLISHED and the badge follows the server', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    await setMaterialStatus(page, 'DRAFT');
+    await page.goto('/library/mat-1');
+
+    await page.getByRole('button', { name: 'Publish', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/listed in the student library/i);
+    await dialog.getByRole('button', { name: 'Publish', exact: true }).click();
+
+    // The action swaps only once the PATCH has resolved AND the invalidated
+    // query has refetched, so this is both the user-visible outcome and the
+    // barrier that makes the probe below race-free.
+    await expect(page.getByRole('button', { name: 'Unpublish' })).toBeVisible();
+
+    // Then assert on the request: the claim is that the dashboard persisted a
+    // status, and a badge redrawn from local state could not show that.
+    const sent = await (
+      await page.request.get(`${STUB_API}/api/v1/__test__/last-material-patch`)
+    ).json();
+    expect(sent.data.status).toBe('PUBLISHED');
+  });
+
+  test('a published material offers Unpublish, which returns it to draft', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    await page.goto('/library/mat-1');
+
+    await page.getByRole('button', { name: 'Unpublish' }).click();
+    const dialog = page.getByRole('dialog');
+    // The consequence that matters: it stops being sold, but nobody loses what
+    // they bought.
+    await expect(dialog).toContainText(/keep it and can still open it/i);
+    await dialog.getByRole('button', { name: 'Unpublish' }).click();
+
+    await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible();
+
+    const sent = await (
+      await page.request.get(`${STUB_API}/api/v1/__test__/last-material-patch`)
+    ).json();
+    expect(sent.data.status).toBe('DRAFT');
+  });
+
+  test('never offers HIDDEN as a way to unpublish', async ({ page, signIn }) => {
+    // HIDDEN hides a material from browse while `assertOnSale` still allows
+    // buying it by id. This interface must not be able to create that state.
+    await signIn('admin');
+    await page.goto('/library/mat-1');
+
+    await page.getByRole('button', { name: 'Unpublish' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Unpublish' }).click();
+    await expect(page.getByRole('button', { name: 'Publish', exact: true })).toBeVisible();
+
+    const sent = await (
+      await page.request.get(`${STUB_API}/api/v1/__test__/last-material-patch`)
+    ).json();
+    expect(sent.data.status).not.toBe('HIDDEN');
+  });
+
+  test('the status change shows in the material list too', async ({ page, signIn }) => {
+    await signIn('admin');
+    await setMaterialStatus(page, 'DRAFT');
+    await page.goto('/library/mat-1');
+
+    await page.getByRole('button', { name: 'Publish', exact: true }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Publish', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Unpublish' })).toBeVisible();
+
+    // The list is a separate query; the mutation invalidates the whole library
+    // domain, which is what keeps the two from disagreeing.
+    await page.goto('/library');
+    const row = page.getByRole('row').filter({ hasText: 'Physics Revision Papers' });
+    await expect(row).toContainText('Published');
+  });
+
+  test('publishing is refused to a teacher by the API, not only hidden', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('teacher');
+
+    const response = await page.request.patch('/api/proxy/admin/library/materials/mat-1', {
+      headers: DASHBOARD_HEADERS,
+      data: { status: 'PUBLISHED' },
+      failOnStatusCode: false,
+    });
+
+    expect(response.status()).toBe(403);
+    expect((await response.json()).code).toBe('INSUFFICIENT_ROLE');
   });
 
   test('marks a free preview as free rather than as zero-priced', async ({ page, signIn }) => {
