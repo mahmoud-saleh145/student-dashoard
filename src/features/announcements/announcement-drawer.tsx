@@ -69,9 +69,18 @@ export function AnnouncementDrawer({
                 Edit
               </Button>
             ) : null}
-            <Button onClick={() => onSendNow(data.id)} loading={sending}>
-              Send now
-            </Button>
+            {/*
+              A cancelled or already-sent announcement cannot be sent again —
+              the backend now refuses the first and the second would deliver a
+              duplicate. Offering the button anyway made "Send now" the one
+              control that could resurrect something an administrator had
+              deliberately called off.
+            */}
+            {data.status !== 'CANCELLED' && data.status !== 'SENT' ? (
+              <Button onClick={() => onSendNow(data.id)} loading={sending}>
+                Send now
+              </Button>
+            ) : null}
           </>
         ) : null
       }

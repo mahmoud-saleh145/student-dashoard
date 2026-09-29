@@ -29,9 +29,18 @@ export function Providers({
         defaultOptions: {
           queries: {
             // Back-office data changes under you constantly — another admin is
-            // editing the same records. Short and refetch-on-focus keeps what
-            // is on screen close to what is true, without hammering the API.
-            staleTime: 30_000,
+            // editing the same records. Refetch-on-focus keeps what is on
+            // screen close to what is true.
+            //
+            // Sixty seconds rather than thirty: with `refetchOnWindowFocus`
+            // on, `staleTime` is what stops every alt-tab from re-running
+            // every mounted query on the screen. At thirty seconds an
+            // administrator switching between the dashboard and a spreadsheet
+            // re-fetched a whole page of panels roughly every other switch —
+            // and each of those requests costs a rate-limiter round trip to a
+            // Redis billed per request. A minute still means nothing on screen
+            // is more than a minute out of date after a focus.
+            staleTime: 60_000,
             gcTime: 5 * 60_000,
             refetchOnWindowFocus: true,
             refetchOnReconnect: true,

@@ -65,10 +65,12 @@ export const serverConfig = {
   isProduction,
 } as const;
 
-/** Cookie names. Short and unremarkable — they carry no information. */
-export const COOKIE = {
-  access: 'edu_at',
-  refresh: 'edu_rt',
-  /** Non-sensitive display copy of the session, readable by the server only. */
-  profile: 'edu_pf',
-} as const;
+/**
+ * Cookie names. Short and unremarkable — they carry no information.
+ *
+ * Defined in `./cookies`, which this file re-exports so existing imports keep
+ * working. They live apart because the edge middleware needs them and must not
+ * import this module: `server-only` and `process.env` reads do not belong in
+ * the edge bundle.
+ */
+export { COOKIE } from '@/lib/cookies';

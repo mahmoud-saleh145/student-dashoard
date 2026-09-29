@@ -164,7 +164,20 @@ function useCourseMutation<TInput, TResult = unknown>(
         await queryClient.invalidateQueries({
           queryKey: queryKeys.courses.detail(courseId),
         });
+
+        // The Parts tab is a different query root that shows the *same*
+        // sections. Deleting or archiving a section refreshed the Content tab
+        // and left Parts listing it, with a stale allocation total — the two
+        // tabs of one screen disagreeing about what the course contains.
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.courseParts.forCourse(courseId),
+        });
       }
+
+      // Assigning or removing a teacher changes their course count and their
+      // assigned-courses list on the Teachers screen, which reads an entirely
+      // separate key and would otherwise stay wrong until it went stale.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.teachers.all });
     },
   });
 }
@@ -265,10 +278,23 @@ export function useDeleteCourse() {
         `admin/courses/${courseId}`,
         { reason },
       ),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
+    onSuccess: async (_result, { courseId }) => {
+      // Dropped, not invalidated. This runs while the course *detail* screen
+      // is still mounted — that is where the button lives — and invalidating
+      // an active query refetches it immediately. The course is gone, so the
+      // refetch 404s and the page flashes "This course could not be loaded"
+      // on its way out. Removing the queries leaves nothing to refetch.
+      queryClient.removeQueries({ queryKey: queryKeys.courses.detail(courseId) });
+      queryClient.removeQueries({ queryKey: queryKeys.courses.sections(courseId) });
+      queryClient.removeQueries({ queryKey: queryKeys.courseParts.forCourse(courseId) });
+
+      await queryClient.invalidateQueries({ queryKey: queryKeys.courses.list(undefined) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.codes.all });
       await queryClient.invalidateQueries({ queryKey: queryKeys.students.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.teachers.all });
+      // The soft delete archives enrollments and revokes codes, so the
+      // headline counters on the Statistics screen have moved.
+      await queryClient.invalidateQueries({ queryKey: ['stats'] });
     },
   });
 }
@@ -343,7 +369,15 @@ export function useUpdateSection(courseId: string) {
   }>(({ sectionId, ...body }) => api.patch(`admin/sections/${sectionId}`, body), courseId);
 }
 
-export function useArchiveSection(courseId: string) {
+/**
+ * Deletes a section, and with it every lecture inside it.
+ *
+ * Named for what it does. It was `useArchiveSection`, which read as the
+ * reversible sibling of the lecture Archive action — it is not: the backend
+ * soft-deletes the section *and* its lectures, and the dashboard has no path
+ * that brings either back.
+ */
+export function useDeleteSection(courseId: string) {
   return useCourseMutation<{ sectionId: string }>(
     ({ sectionId }) => api.delete(`admin/sections/${sectionId}`),
     courseId,

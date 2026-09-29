@@ -115,8 +115,22 @@ function SidebarContent({
     queryKey: queryKeys.support.counters,
     queryFn: () => api.get<{ open: number; pending: number; unread: number }>('admin/support/counters'),
     enabled: can('manageSupport'),
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    /*
+     * Five minutes, not one.
+     *
+     * This is the sidebar's support badge, and it polls for as long as a
+     * dashboard tab is open — which for an administrator is the whole working
+     * day. At 60 seconds that was ~480 requests per tab per shift, each one
+     * passing through the Redis-backed rate limiter on a per-request plan,
+     * to move a number that nobody is watching second by second. Anyone
+     * actually working a ticket is on the Support screen, whose own queries
+     * refetch on focus and after every mutation.
+     *
+     * `refetchIntervalInBackground` is left at its default of false, so a
+     * backgrounded tab stops polling altogether.
+     */
+    refetchInterval: 300_000,
+    staleTime: 300_000,
   });
 
   const badges = { support: supportCounters?.open ?? 0 };

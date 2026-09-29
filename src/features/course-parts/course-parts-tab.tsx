@@ -199,6 +199,10 @@ export function CoursePartsTab({
           });
         }}
         busy={remove.isPending}
+        // A part with purchases is refused by the server, and the message
+        // below already says so. Leaving the button live meant the only way to
+        // learn that was to press it and read an error toast.
+        confirmDisabled={Boolean(deleting?.purchaseCount)}
         title="Remove this part?"
         confirmLabel="Remove part"
         message={

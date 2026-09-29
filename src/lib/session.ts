@@ -123,6 +123,46 @@ export async function signIn(params: {
   return user;
 }
 
+/**
+ * Cookie writes that may be happening during a render.
+ *
+ * Next allows `cookies().set()` only in a Route Handler or a Server Action. A
+ * Server Component — which is what the dashboard layout is — throws
+ * "Cookies can only be modified in a Server Action or Route Handler", and that
+ * throw took the whole page down.
+ *
+ * It surfaced exactly where it hurts: an administrator whose access cookie had
+ * lapsed (12 hours) still held a valid refresh token, so the layout tried to
+ * rotate it mid-render and crashed instead of quietly signing them back in.
+ *
+ * The write is genuinely optional in that context. The value is still returned
+ * to the caller and used for this render; the proxy — a Route Handler, where
+ * writing is allowed — persists the rotation on the very next data request.
+ * So the correct behaviour is to attempt the write and carry on without it.
+ */
+type CookieJar = Awaited<ReturnType<typeof cookies>>;
+
+function trySetCookie(
+  jar: CookieJar,
+  name: string,
+  value: string,
+  options: ReturnType<typeof cookieOptions>,
+): void {
+  try {
+    jar.set(name, value, options);
+  } catch {
+    // Read-only store (a Server Component render). Not fatal — see above.
+  }
+}
+
+function tryDeleteCookie(jar: CookieJar, name: string): void {
+  try {
+    jar.delete(name);
+  } catch {
+    // Same. The proxy or the sign-out route will clear it on the next request.
+  }
+}
+
 /** Revokes the session server-side, then clears the cookies either way. */
 export async function signOut(): Promise<void> {
   const jar = await cookies();
@@ -136,9 +176,9 @@ export async function signOut(): Promise<void> {
     );
   }
 
-  jar.delete(COOKIE.access);
-  jar.delete(COOKIE.refresh);
-  jar.delete(COOKIE.profile);
+  tryDeleteCookie(jar, COOKIE.access);
+  tryDeleteCookie(jar, COOKIE.refresh);
+  tryDeleteCookie(jar, COOKIE.profile);
 }
 
 /** The signed-in user, or null. Reads the cookie; does not call the backend. */
@@ -157,16 +197,32 @@ export async function requireSessionUser(): Promise<SessionUser | null> {
   if (!cached) return null;
 
   try {
-    const token = await getAccessToken();
-    if (!token) return null;
+    // Deliberately the cookie as it stands, not `getAccessToken()`.
+    //
+    // `getAccessToken` rotates when the access cookie has lapsed, and a
+    // rotation this layout cannot persist is a rotation that burns a
+    // single-use refresh token for nothing — the backend would issue a new
+    // family, the write would be dropped, and the browser would still be
+    // holding the token that had just been spent. The next request would then
+    // present a revoked token and the session would die for real.
+    //
+    // So: verify with the token we have, and if there is none, trust the
+    // cached profile for this render. The shell appears, and the first data
+    // request goes through the proxy — a Route Handler, which *can* write —
+    // where the rotation happens properly and is kept.
+    const readJar = await cookies();
+    const token = readJar.get(COOKIE.access)?.value;
+    if (!token) return cached;
 
     const { data } = await backendRequest<LoginResponse['user']>({
       path: '/auth/me',
       accessToken: token,
     });
 
+    // A role or status that no longer belongs here. Not recoverable by any
+    // token, so the caller redirects to the route handler that can actually
+    // clear the cookies (this function may be running inside a render).
     if (!isDashboardRole(data.role) || data.status !== 'ACTIVE') {
-      await signOut();
       return null;
     }
 
@@ -181,16 +237,26 @@ export async function requireSessionUser(): Promise<SessionUser | null> {
     };
 
     const jar = await cookies();
-    jar.set(COOKIE.profile, encodeProfile(user), cookieOptions(REFRESH_MAX_AGE));
+    trySetCookie(jar, COOKIE.profile, encodeProfile(user), cookieOptions(REFRESH_MAX_AGE));
     return user;
   } catch (error) {
-    if (error instanceof ApiError && error.endsSession) {
-      await signOut();
+    // A disabled account cannot be rescued by a new token, so it ends here.
+    if (error instanceof ApiError && error.code === 'ACCOUNT_DISABLED') {
       return null;
     }
-    // The API being briefly unreachable is not a reason to sign someone out;
-    // the cached identity is enough to render the shell, and every data panel
-    // will surface the real error on its own.
+
+    // Everything else — including a 401 from an access token that simply
+    // lapsed — renders the shell from the cached identity.
+    //
+    // This deliberately does NOT rotate. A Server Component cannot persist a
+    // cookie, so rotating here would spend the single-use refresh token and
+    // then fail to save its replacement, leaving the browser holding a token
+    // the backend had already retired: a guaranteed logout one request later.
+    // The proxy is a Route Handler, it sees the same 401, and it can keep what
+    // it gets — so rotation belongs there and only there.
+    //
+    // If the session really is dead, every data panel on the page will say so
+    // within a moment and the client tears the session down properly.
     return cached;
   }
 }
@@ -202,7 +268,34 @@ export async function requireSessionUser(): Promise<SessionUser | null> {
  * rotating, so two parallel refreshes would present the same token twice and
  * be read as theft, revoking the whole family.
  */
-let refreshInFlight: Promise<string | null> | null = null;
+//
+// Keyed by the refresh token, NOT a single module-level promise.
+//
+// A single shared promise is a cross-account session leak, not merely a
+// tidiness problem. This module is evaluated once per server process and that
+// process serves every administrator at once. With one global promise, an
+// administrator whose access cookie had expired would find a refresh already
+// "in flight" — someone else's — await it, and receive **that person's** newly
+// minted access token. The proxy would then forward it to the backend, which
+// would authorise the request perfectly correctly as the wrong user.
+//
+// Keying by the presented refresh token preserves the property that actually
+// matters — two concurrent requests from one browser share one rotation, so a
+// single-use token is never presented twice and the family is never revoked as
+// theft — while making it impossible for two different sessions to share one.
+const refreshInFlight = new Map<string, Promise<string | null>>();
+
+function rotate(refreshToken: string): Promise<string | null> {
+  const existing = refreshInFlight.get(refreshToken);
+  if (existing) return existing;
+
+  const pending = refreshSession(refreshToken).finally(() => {
+    refreshInFlight.delete(refreshToken);
+  });
+
+  refreshInFlight.set(refreshToken, pending);
+  return pending;
+}
 
 export async function getAccessToken(): Promise<string | null> {
   const jar = await cookies();
@@ -212,11 +305,7 @@ export async function getAccessToken(): Promise<string | null> {
   const refresh = jar.get(COOKIE.refresh)?.value;
   if (!refresh) return null;
 
-  refreshInFlight ??= refreshSession(refresh).finally(() => {
-    refreshInFlight = null;
-  });
-
-  return refreshInFlight;
+  return rotate(refresh);
 }
 
 /** Forces a rotation — called by the proxy when the backend answers 401. */
@@ -225,11 +314,7 @@ export async function refreshAccessToken(): Promise<string | null> {
   const refresh = jar.get(COOKIE.refresh)?.value;
   if (!refresh) return null;
 
-  refreshInFlight ??= refreshSession(refresh).finally(() => {
-    refreshInFlight = null;
-  });
-
-  return refreshInFlight;
+  return rotate(refresh);
 }
 
 async function refreshSession(refreshToken: string): Promise<string | null> {
@@ -244,15 +329,15 @@ async function refreshSession(refreshToken: string): Promise<string | null> {
     });
 
     const jar = await cookies();
-    jar.set(COOKIE.access, data.accessToken, cookieOptions(ACCESS_MAX_AGE));
-    jar.set(COOKIE.refresh, data.refreshToken, cookieOptions(REFRESH_MAX_AGE));
+    trySetCookie(jar, COOKIE.access, data.accessToken, cookieOptions(ACCESS_MAX_AGE));
+    trySetCookie(jar, COOKIE.refresh, data.refreshToken, cookieOptions(REFRESH_MAX_AGE));
 
     return data.accessToken;
   } catch {
     const jar = await cookies();
-    jar.delete(COOKIE.access);
-    jar.delete(COOKIE.refresh);
-    jar.delete(COOKIE.profile);
+    tryDeleteCookie(jar, COOKIE.access);
+    tryDeleteCookie(jar, COOKIE.refresh);
+    tryDeleteCookie(jar, COOKIE.profile);
     return null;
   }
 }

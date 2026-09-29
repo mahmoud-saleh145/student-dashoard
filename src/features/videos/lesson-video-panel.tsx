@@ -13,6 +13,7 @@ import {
   useRetryVideoProcessing,
   useVideoStatus,
 } from '@/features/videos/hooks';
+import { useTeacherCapabilities } from '@/features/settings/hooks';
 import { useVideoUpload, VIDEO_UPLOAD_TYPES } from '@/features/videos/upload';
 import { messageFor } from '@/lib/errors';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
@@ -83,6 +84,12 @@ export function LessonVideoPanel({
   const status = useVideoStatus(videoId, !upload.isBusy);
   const retry = useRetryVideoProcessing(courseId);
   const removeVideo = useDeleteVideo(courseId);
+
+  // Admins and the master are unconstrained; a teacher is subject to the
+  // platform switch. While it is still loading the control stays hidden, which
+  // is the safe direction: a button that appears a beat late is better than
+  // one that appears and then refuses.
+  const { canDeleteVideos } = useTeacherCapabilities();
 
   const detail = status.data && !status.data.deleted ? status.data : undefined;
 
@@ -197,7 +204,17 @@ export function LessonVideoPanel({
               <Button type="button" variant="secondary" size="sm" onClick={pick}>
                 {currentStatus ? 'Replace video' : 'Choose video'}
               </Button>
-              {currentStatus && videoId && currentStatus !== 'PROCESSING' ? (
+              {/*
+                Gated on the same platform switch the backend enforces. The
+                button was previously shown to every teacher, so one with
+                `canDeleteVideos` off could confirm a deletion and receive a
+                403 for their trouble — an offer the product had already
+                decided not to make.
+              */}
+              {currentStatus &&
+              videoId &&
+              currentStatus !== 'PROCESSING' &&
+              canDeleteVideos ? (
                 <Button
                   type="button"
                   variant="ghost"

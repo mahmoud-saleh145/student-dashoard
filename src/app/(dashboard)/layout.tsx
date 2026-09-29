@@ -20,7 +20,17 @@ export const dynamic = 'force-dynamic';
  */
 export default async function DashboardLayout({ children }: { children: ReactNode }) {
   const user = await requireSessionUser();
-  if (!user) redirect('/login');
+
+  // Reached only when a session cookie was present but the backend refused it
+  // outright — disabled, or no longer a staff role. The middleware already
+  // turned away anyone with no cookie at all, carrying their destination with
+  // them, and a merely-expired access token is left to the proxy to rotate.
+  //
+  // Via the route handler rather than straight to /login, because this is a
+  // Server Component: it cannot clear the cookies itself, and sending someone
+  // to a login page while they still hold a session cookie is what produced
+  // the bounce between the two.
+  if (!user) redirect('/api/auth/expired?reason=forbidden');
 
   return (
     <Providers user={user}>

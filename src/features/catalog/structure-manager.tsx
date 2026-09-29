@@ -160,13 +160,21 @@ export function StructureManager() {
       },
       row.isActive
         ? {
-            label: 'Delete',
+            // "Deactivate", not "Delete". Nothing is removed: the row is
+            // flagged inactive so it stops being offered, and every student
+            // profile, course and code that references it is untouched. The
+            // confirmation dialog has always said "Deactivate"; the menu
+            // promising something harsher was the part that was wrong.
+            label: 'Deactivate',
             danger: true,
             onSelect: () =>
               setConfirming({ entity, id: row.id, label: row.name }),
           }
         : {
             label: 'Reactivate',
+            // Idempotent on the server, but a double click still fires two
+            // requests and two toasts.
+            disabled: reactivate.isPending,
             onSelect: () => void restore(entity, row.id, row.name),
           },
     ];

@@ -288,6 +288,26 @@ function TicketDrawer({
     onSuccess: invalidate,
   });
 
+  /**
+   * Status and priority changes, with their failures shown.
+   *
+   * These were `void update.mutateAsync(...)` — a floating promise. A rejected
+   * PATCH produced an unhandled rejection in the console and nothing at all on
+   * screen: the `<Select>` is controlled by the server value, so it snapped
+   * back to what it was and the operator was left believing they had closed a
+   * ticket they had not.
+   */
+  async function applyTicketChange(
+    input: { status?: SupportStatus; priority?: string },
+    failureTitle: string,
+  ) {
+    try {
+      await update.mutateAsync(input);
+    } catch (error) {
+      toast.error(error, failureTitle);
+    }
+  }
+
   async function submitReply() {
     if (reply.trim().length < 1) return;
 
@@ -317,8 +337,15 @@ function TicketDrawer({
               aria-label="Ticket status"
               className="w-40"
               value={data.status}
+              // Disabled while in flight so a quick second change cannot race
+              // the first and leave the ticket in whichever order the server
+              // happened to answer.
+              disabled={update.isPending}
               onChange={(event) =>
-                void update.mutateAsync({ status: event.target.value as SupportStatus })
+                void applyTicketChange(
+                  { status: event.target.value as SupportStatus },
+                  'The ticket status was not changed',
+                )
               }
               options={SUPPORT_STATUSES.map((status) => ({
                 value: status,
@@ -330,7 +357,13 @@ function TicketDrawer({
               aria-label="Ticket priority"
               className="w-36"
               value={data.priority}
-              onChange={(event) => void update.mutateAsync({ priority: event.target.value })}
+              disabled={update.isPending}
+              onChange={(event) =>
+                void applyTicketChange(
+                  { priority: event.target.value },
+                  'The ticket priority was not changed',
+                )
+              }
               options={SUPPORT_PRIORITIES.map((priority) => ({
                 value: priority,
                 label: priority.toLowerCase(),

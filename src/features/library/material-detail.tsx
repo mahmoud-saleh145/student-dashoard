@@ -1,5 +1,6 @@
 'use client';
 
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 import { ContentStatusBadge } from '@/components/data/status';
@@ -17,6 +18,7 @@ import {
   useLibraryMaterial,
   useRemoveLibraryPackage,
   useRemoveLibraryPart,
+  useRemoveMaterial,
   useUpdateMaterial,
 } from './hooks';
 
@@ -92,10 +94,12 @@ function publishActionFor(status: ContentStatus, partCount: number): PublishActi
  */
 export function MaterialDetail({ materialId }: { materialId: string }) {
   const toast = useToast();
+  const router = useRouter();
   const material = useLibraryMaterial(materialId);
 
   const removePart = useRemoveLibraryPart();
   const removePackage = useRemoveLibraryPackage();
+  const removeMaterial = useRemoveMaterial();
   const updateMaterial = useUpdateMaterial(materialId);
 
   const [editingMaterial, setEditingMaterial] = useState(false);
@@ -110,6 +114,7 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
   const [deletingPart, setDeletingPart] = useState<LibraryPartRow | null>(null);
   const [deletingPackage, setDeletingPackage] = useState<LibraryPackageRow | null>(null);
   const [pendingPublish, setPendingPublish] = useState<PublishAction | null>(null);
+  const [deletingMaterial, setDeletingMaterial] = useState(false);
 
   const data = material.data;
   const parts = data?.parts ?? [];
@@ -133,6 +138,19 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
       toast.error(error, 'The material status was not changed');
     } finally {
       setPendingPublish(null);
+    }
+  }
+
+  async function runDeleteMaterial() {
+    try {
+      await removeMaterial.mutateAsync(materialId);
+      toast.success('Material removed', 'It is no longer in the catalogue.');
+      // Leave before the invalidated detail query can refetch a material that
+      // is gone; staying would replace the page with a "not found" state.
+      router.replace('/library');
+    } catch (error) {
+      toast.error(error, 'The material was not removed');
+      setDeletingMaterial(false);
     }
   }
 
@@ -160,6 +178,17 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
               ) : null}
               <Button variant="secondary" onClick={() => setEditingMaterial(true)}>
                 Edit material
+              </Button>
+              {/*
+                The endpoint has always existed and nothing called it, so a
+                material added by mistake could be unpublished but never
+                removed. The backend refuses once any student holds an
+                entitlement to one of its documents, which is the rule that
+                protects what people spent credit on — the dialog says so, so
+                the refusal is expected rather than a surprise.
+              */}
+              <Button variant="ghost" onClick={() => setDeletingMaterial(true)}>
+                Delete material
               </Button>
               <Button onClick={() => setPartDialog({ open: true, part: null })}>
                 Add document
@@ -392,6 +421,24 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
         materialId={materialId}
         parts={parts}
         pkg={packageDialog.pkg}
+      />
+
+      <ConfirmDialog
+        open={deletingMaterial}
+        onCancel={() => setDeletingMaterial(false)}
+        onConfirm={() => void runDeleteMaterial()}
+        title="Delete this material?"
+        confirmLabel="Delete material"
+        busy={removeMaterial.isPending}
+        message={
+          <>
+            <strong className="text-foreground">{data?.title}</strong> and its{' '}
+            {parts.length} document{parts.length === 1 ? '' : 's'} leave the catalogue.
+            Students who have already bought any of them keep what they paid for, and the
+            purchase and credit history is retained — so if anyone holds one, the server
+            will refuse this and you should unpublish the material instead.
+          </>
+        }
       />
 
       <ConfirmDialog

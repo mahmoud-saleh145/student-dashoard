@@ -64,3 +64,30 @@ export async function armExpiredToken(page: Page): Promise<void> {
 export async function forbidPath(page: Page, path: string): Promise<void> {
   await page.request.get(`${STUB_API}/__test__/forbid?path=${encodeURIComponent(path)}`);
 }
+
+/** Makes every authenticated call 401, and refresh fail — a revoked session. */
+export async function revokeSession(page: Page): Promise<void> {
+  await page.request.get(`${STUB_API}/__test__/revoke-session`);
+}
+
+/** Leaves the access token working but makes the refresh exchange refuse. */
+export async function rejectRefresh(page: Page): Promise<void> {
+  await page.request.get(`${STUB_API}/__test__/reject-refresh`);
+}
+
+/** Makes every authenticated call answer 403 ACCOUNT_DISABLED. */
+export async function disableAccount(page: Page): Promise<void> {
+  await page.request.get(`${STUB_API}/__test__/disable-account`);
+}
+
+/** Every path the stub has been asked for, in order. */
+export async function stubRequests(page: Page): Promise<string[]> {
+  const response = await page.request.get(`${STUB_API}/__test__/requests`);
+  const body = (await response.json()) as { data?: { requests?: string[] } };
+  return body.data?.requests ?? [];
+}
+
+/** Every authenticated call 401s until a refresh succeeds — a lapsed token. */
+export async function staleAccessToken(page: Page): Promise<void> {
+  await page.request.get(`${STUB_API}/__test__/stale-access-token`);
+}

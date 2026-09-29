@@ -136,6 +136,11 @@ export function useDeleteAccount() {
         queryClient.invalidateQueries({ queryKey: queryKeys.teachers.all }),
         queryClient.invalidateQueries({ queryKey: queryKeys.students.all }),
         queryClient.invalidateQueries({ queryKey: queryKeys.courses.all }),
+        // The account keeps its wallet row and its ledger — deleting does not
+        // erase money — but the row's name and status on the Wallet screen
+        // have changed, and the headline counts have moved.
+        queryClient.invalidateQueries({ queryKey: queryKeys.wallet.all }),
+        queryClient.invalidateQueries({ queryKey: ['stats'] }),
       ]);
     },
   });

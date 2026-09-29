@@ -48,7 +48,10 @@ export function DeviceRequests() {
       api.page<ChangeRequestRow>('admin/devices/change-requests', {
         query: { status: 'PENDING', page: 1, pageSize: 50 },
       }),
-    refetchInterval: 60_000,
+    // Two minutes. A device change request is a person waiting on a human
+    // decision, not a live feed; the screen also refetches on focus and after
+    // every approve/reject, so the poll is only for a tab left sitting open.
+    refetchInterval: 120_000,
   });
 
   const review = useMutation({

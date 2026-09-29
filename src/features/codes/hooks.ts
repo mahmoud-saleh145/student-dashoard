@@ -122,6 +122,11 @@ export function useRevokeCode() {
       api.post(`admin/codes/${input.codeId}/revoke`, { reason: input.reason }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.codes.all });
+      // A cancelled card stops being sellable stock, which moves the headline
+      // counters; and recharge cards share this endpoint, so the wallet screen
+      // is looking at the same row under a different key.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.wallet.all });
+      await queryClient.invalidateQueries({ queryKey: ['stats'] });
     },
   });
 }
@@ -134,6 +139,8 @@ export function useRevokeBatch() {
       api.post(`admin/codes/batches/${input.batchId}/revoke`, { reason: input.reason }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.codes.all });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.wallet.all });
+      await queryClient.invalidateQueries({ queryKey: ['stats'] });
     },
   });
 }

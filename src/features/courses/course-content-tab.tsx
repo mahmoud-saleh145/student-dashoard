@@ -12,7 +12,7 @@ import { EmptyState, ErrorState, Skeleton } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import { LessonAnalyticsDrawer } from '@/features/courses/lesson-analytics-drawer';
 import {
-  useArchiveSection,
+  useDeleteSection,
   useCourseSections,
   useCreateLesson,
   useCreateSection,
@@ -55,7 +55,7 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
 
   const sections = useCourseSections(courseId);
   const createSection = useCreateSection(courseId);
-  const archiveSection = useArchiveSection(courseId);
+  const deleteSection = useDeleteSection(courseId);
   const updateSection = useUpdateSection(courseId);
   const setLessonStatus = useSetLessonStatus(courseId);
   const deleteLesson = useDeleteLesson(courseId);
@@ -127,7 +127,7 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
 
     try {
       if (confirming.kind === 'delete-section') {
-        await archiveSection.mutateAsync({ sectionId: confirming.id });
+        await deleteSection.mutateAsync({ sectionId: confirming.id });
         toast.success(
           'Section deleted',
           'Its lectures were deleted with it. Watch history was kept.',
@@ -298,7 +298,7 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
         title={confirmCopy?.title ?? ''}
         message={confirmCopy?.body ?? ''}
         confirmLabel={confirmCopy?.label ?? 'Confirm'}
-        busy={archiveSection.isPending || deleteLesson.isPending || setLessonStatus.isPending}
+        busy={deleteSection.isPending || deleteLesson.isPending || setLessonStatus.isPending}
       />
 
       <LessonVideoModal

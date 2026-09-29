@@ -1,7 +1,7 @@
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
@@ -219,6 +219,12 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
     defaultValues: { fullName: '', phone: '', password: '', confirmPassword: '' },
   });
 
+  // The new admin has to appear in the list behind this dialog. Without this
+  // the row only showed up on the next refetch, which reads as the creation
+  // having silently failed — and invites a second attempt on a phone number
+  // that now already exists.
+  const queryClient = useQueryClient();
+
   async function onSubmit(values: FormValues) {
     try {
       const parsed = schema.parse(values);
@@ -230,6 +236,8 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
         password: parsed.password,
         role: 'ADMIN',
       });
+
+      await queryClient.invalidateQueries({ queryKey: queryKeys.admins.all });
 
       toast.success('Admin added', 'They can sign in to the dashboard with this password.');
       reset();

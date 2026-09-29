@@ -101,6 +101,30 @@ const control = {
   videos: new Map(),
   /** When true, the next request with a valid token answers 401 once. */
   expireAccessTokenOnce: false,
+  /**
+   * When true, EVERY authenticated request answers 401 — a session the backend
+   * has revoked, rather than an access token that merely lapsed. This is the
+   * case a refresh cannot rescue.
+   */
+  sessionRevoked: false,
+  /** When true, `/auth/refresh` refuses. Pairs with `sessionRevoked`. */
+  rejectRefresh: false,
+  /**
+   * Models an access token that has simply lapsed: every authenticated call
+   * answers 401 until a refresh succeeds, at which point it clears itself.
+   *
+   * The one-shot `expireAccessTokenOnce` cannot express this — whichever
+   * request happened to arrive first consumed it, which in practice was the
+   * layout's `/auth/me` rather than the data call under test.
+   */
+  accessTokenStale: false,
+  /**
+   * When true, authenticated requests answer 403 ACCOUNT_DISABLED — a session
+   * that is valid but belongs to an account that has been turned off. It is a
+   * 403 that must still end the session, unlike an ordinary permission
+   * refusal, and the two are deliberately tested against each other.
+   */
+  accountDisabled: false,
   /** Endpoints that should answer 403 regardless of the caller. */
   forbid: new Set(),
   /** Every path the dashboard has asked for, in order. */
@@ -800,6 +824,10 @@ const server = createServer(async (req, res) => {
       lastRequest.generateCodes = null;
       lastRequest.libraryPart = null;
       control.expireAccessTokenOnce = false;
+      control.sessionRevoked = false;
+      control.rejectRefresh = false;
+      control.accessTokenStale = false;
+      control.accountDisabled = false;
       control.forbid.clear();
       control.requests.length = 0;
       control.lessonStatus.clear();
@@ -813,6 +841,23 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/__test__/expire-access-token') {
       control.expireAccessTokenOnce = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/stale-access-token') {
+      control.accessTokenStale = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/revoke-session') {
+      control.sessionRevoked = true;
+      control.rejectRefresh = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/reject-refresh') {
+      control.rejectRefresh = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/disable-account') {
+      control.accountDisabled = true;
       return ok(res, { armed: true });
     }
     if (path === '/__test__/forbid') {
@@ -896,8 +941,15 @@ const server = createServer(async (req, res) => {
 
   if (path === '/auth/refresh' && method === 'POST') {
     const body = await readBody(req);
+    if (control.rejectRefresh) {
+      return fail(res, 401, 'SESSION_EXPIRED', 'Refresh token rejected.');
+    }
     const userId = String(body.refreshToken ?? '').replace(/^refresh\./, '');
     if (!byId(userId)) return fail(res, 401, 'SESSION_EXPIRED', 'Refresh token rejected.');
+
+    // A successful rotation is what makes the old access token stop being
+    // stale, exactly as it would in production.
+    control.accessTokenStale = false;
 
     return ok(res, { accessToken: tokenFor(userId), refreshToken: `refresh.${userId}` });
   }
@@ -911,6 +963,18 @@ const server = createServer(async (req, res) => {
   const user = byId(userIdFromToken(token));
 
   if (!user) return fail(res, 401, 'UNAUTHORIZED', 'Missing or invalid token.');
+
+  if (control.sessionRevoked) {
+    return fail(res, 401, 'SESSION_EXPIRED', 'This session has been revoked.');
+  }
+
+  if (control.accessTokenStale) {
+    return fail(res, 401, 'SESSION_EXPIRED', 'Access token expired.');
+  }
+
+  if (control.accountDisabled) {
+    return fail(res, 403, 'ACCOUNT_DISABLED', 'This account has been disabled.');
+  }
 
   if (control.expireAccessTokenOnce) {
     control.expireAccessTokenOnce = false;

@@ -66,13 +66,8 @@ async function request<T>(
   if (!response.ok) {
     const error = toApiError(parsed, response.status);
 
-    // A dead session cannot be recovered by any amount of retrying. Send the
-    // browser to the login screen with a marker so it can say why, rather
-    // than showing a wall of failed panels.
-    if (error.endsSession && typeof window !== 'undefined') {
-      const next = encodeURIComponent(window.location.pathname + window.location.search);
-      window.location.assign(`/login?reason=expired&next=${next}`);
-    }
+    // A dead session cannot be recovered by any amount of retrying.
+    if (error.endsSession) endSession(error.code === 'ACCOUNT_DISABLED' ? 'forbidden' : 'expired');
 
     throw error;
   }
@@ -82,6 +77,58 @@ async function request<T>(
     envelope !== null && typeof envelope === 'object' && 'data' in envelope;
 
   return (hasEnvelope ? envelope.data : parsed) as T;
+}
+
+/**
+ * Tears the session down, once, and leaves for the login screen.
+ *
+ * Three things have to happen here and the previous version did only the last
+ * of them, which produced a redirect loop:
+ *
+ *  1. **The cookies must be cleared server-side.** A bare `location.assign`
+ *     left the access, refresh and profile cookies in place, so the login page
+ *     saw a session, redirected back to the dashboard, the same panel 401'd
+ *     again — and round it went. Clearing first is what ends the loop, and it
+ *     is also what makes "sign out" mean anything: a dead session must not
+ *     leave a usable refresh token in the browser.
+ *
+ *  2. **It must happen once.** A dashboard page fires a dozen queries in
+ *     parallel; on an expired session every one of them fails at nearly the
+ *     same instant. Without this latch that is a dozen logout POSTs and a
+ *     dozen competing navigations.
+ *
+ *  3. **The destination is preserved** so the user returns to the page they
+ *     were on, as a path only — never an absolute URL (see `safeNext` on the
+ *     login page, which refuses anything else).
+ *
+ * Deliberately *not* called for 403. A forbidden action is a real answer from
+ * the backend to an authenticated user, and signing them out for asking is the
+ * bug this split exists to prevent.
+ */
+let sessionEnding = false;
+
+function endSession(reason: 'expired' | 'forbidden'): void {
+  if (typeof window === 'undefined') return;
+  if (sessionEnding) return;
+  // Already at the door; nothing to tear down and nowhere to send them.
+  if (window.location.pathname === '/login') return;
+
+  sessionEnding = true;
+
+  const next = encodeURIComponent(window.location.pathname + window.location.search);
+
+  void fetch('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'x-dashboard-request': '1' },
+    credentials: 'same-origin',
+    // The browser must leave even if the sign-out call fails; a session that
+    // cannot be revoked server-side still must not stay usable in this tab.
+    keepalive: true,
+  })
+    .catch(() => undefined)
+    .finally(() => {
+      window.location.assign(`/login?reason=${reason}&next=${next}`);
+    });
 }
 
 function safeJson(text: string): unknown {

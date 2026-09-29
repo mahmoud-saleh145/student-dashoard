@@ -16,8 +16,17 @@ export default async function LoginPage({
 
   // Already signed in — do not show a login form to someone who has a session;
   // it reads as though their session was lost.
-  const user = await getSessionUser();
-  if (user) redirect(safeNext(params.next) ?? '/');
+  //
+  // Suppressed when the client sent them here with a reason. That case means
+  // the dashboard just decided the session was dead; bouncing them straight
+  // back on the strength of a cookie that is still on disk is how a redirect
+  // loop starts. The client clears the cookies before navigating, so this is
+  // belt and braces — but it is the belt that cannot fail, because it needs
+  // nothing to have succeeded first.
+  if (!params.reason) {
+    const user = await getSessionUser();
+    if (user) redirect(safeNext(params.next) ?? '/');
+  }
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
