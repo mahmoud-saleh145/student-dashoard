@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { PUBLIC_PAGE_PATHS } from '@/features/public-site/site';
 import { COOKIE } from '@/lib/cookies';
 
 /**
@@ -25,8 +26,12 @@ import { COOKIE } from '@/lib/cookies';
  * authorization logic in a place that cannot do it correctly.
  */
 
-/** Paths that must stay reachable with no session at all. */
-const PUBLIC_PATHS = new Set(['/login']);
+/**
+ * Paths that must stay reachable with no session at all: the login page, and
+ * the store-facing legal/support pages under src/app/(public), which reviewers
+ * and students open without any account on this dashboard.
+ */
+const PUBLIC_PATHS = new Set(['/login', ...PUBLIC_PAGE_PATHS]);
 
 function isPublic(pathname: string): boolean {
   return PUBLIC_PATHS.has(pathname);

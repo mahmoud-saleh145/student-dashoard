@@ -224,3 +224,35 @@
     text-wrap: balance;
   }
 }
+
+/*
+ * Long-form text on the public legal and support pages (src/app/(public)).
+ * Tailwind's reset removes list markers and link styling; documents need them.
+ * Logical padding so the markers sit on the correct side in Arabic.
+ */
+@layer components {
+  .public-prose ul,
+  .public-prose ol {
+    padding-inline-start: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+  .public-prose ul {
+    list-style: disc;
+  }
+  .public-prose ol {
+    list-style: decimal;
+  }
+  [dir='rtl'] .public-prose ol {
+    list-style: arabic-indic;
+  }
+  .public-prose a {
+    color: var(--color-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .public-prose strong {
+    font-weight: 600;
+  }
+}
