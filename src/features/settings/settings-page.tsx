@@ -7,6 +7,8 @@ import { Field, Switch, TextInput } from '@/components/ui/field';
 import { Card, CardBody, CardHeader, PageHeader } from '@/components/ui/primitives';
 import { CardsSkeleton, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
+import { ThumbnailField } from '@/features/thumbnails/thumbnail-field';
+import { useThumbnailUpload } from '@/features/thumbnails/upload';
 import { usePlatformSettings, useUpdateSettings } from '@/features/settings/hooks';
 import type { PlatformSettings } from '@/types/domain';
 
@@ -30,9 +32,30 @@ export function SettingsPage() {
 
   const [draft, setDraft] = useState<PlatformSettings | null>(null);
 
+  // The library default cover. Uploading stores the object key in the draft,
+  // so it is saved with everything else rather than as a side effect — the
+  // reader can still discard it by leaving without saving.
+  const libraryDefault = useThumbnailUpload({ kind: 'library-default' });
+
   useEffect(() => {
     if (settings.data?.settings) setDraft(settings.data.settings);
   }, [settings.data]);
+
+  // Folding the finished upload into the draft is what makes it savable, and
+  // marks the form dirty so the Save button lights up.
+  useEffect(() => {
+    const key = libraryDefault.objectKey;
+    // Narrowed to a local first: inside the updater, `objectKey` is still
+    // `string | null` as far as the compiler is concerned, and the setting is
+    // a plain string.
+    if (libraryDefault.phase === 'done' && key) {
+      setDraft((current) =>
+        current && current['library.defaultThumbnailKey'] !== key
+          ? { ...current, 'library.defaultThumbnailKey': key }
+          : current,
+      );
+    }
+  }, [libraryDefault.phase, libraryDefault.objectKey]);
 
   const dirty =
     draft !== null &&
@@ -159,6 +182,33 @@ export function SettingsPage() {
             checked={draft['student.allowAcademicYearChange']}
             onChange={(value) => set('student.allowAcademicYearChange', value)}
           />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Library default cover"
+          description="The image shown for a library document that has no cover of its own."
+        />
+        <CardBody className="flex flex-col gap-3">
+          <ThumbnailField
+            upload={libraryDefault}
+            label="Default cover image"
+            onClear={
+              draft['library.defaultThumbnailKey']
+                ? () => {
+                    set('library.defaultThumbnailKey', '');
+                    libraryDefault.reset();
+                  }
+                : undefined
+            }
+          />
+          <p className="text-xs text-muted">
+            Applied when a document is read, not written onto it. A document that already has
+            its own cover keeps it, and changing this default never overwrites a cover someone
+            chose deliberately. Documents inherit their material&rsquo;s cover first and fall
+            back to this only when neither exists.
+          </p>
         </CardBody>
       </Card>
 

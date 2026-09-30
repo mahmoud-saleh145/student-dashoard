@@ -20,6 +20,7 @@ export const queryKeys = {
     faculties: (universityId: string) => ['catalog', 'faculties', universityId] as const,
     departments: (facultyId: string) => ['catalog', 'departments', facultyId] as const,
     academicYears: ['catalog', 'academic-years'] as const,
+    academicStructures: ['catalog', 'academic-structures'] as const,
   },
 
   subjects: {

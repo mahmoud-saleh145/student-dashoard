@@ -12,6 +12,9 @@ import { PART_PRICING_MODELS, PART_PRICING_MODEL_LABEL } from '@/types/commerce'
 import type { CoursePartRow, PartPricingModel } from '@/types/commerce';
 import type { SectionRow } from '@/types/domain';
 
+import { ThumbnailField } from '@/features/thumbnails/thumbnail-field';
+import { useThumbnailUpload } from '@/features/thumbnails/upload';
+
 import { useCreateCoursePart, useUpdateCoursePart, useSetPartSections } from './hooks';
 
 /**
@@ -54,6 +57,16 @@ export function PartDialog({
   const create = useCreateCoursePart(courseId);
   const update = useUpdateCoursePart(courseId);
   const setSections = useSetPartSections(courseId);
+
+  // The upload route needs a partId, which does not exist until the part is
+  // saved — the same constraint the video panel has. So the field is offered
+  // only when editing, and says why when it is not.
+  const thumbnail = useThumbnailUpload({
+    kind: 'course-part',
+    courseId,
+    partId: part?.id ?? 'unsaved',
+  });
+  const [clearThumbnail, setClearThumbnail] = useState(false);
 
   const [title, setTitle] = useState('');
   const [titleAr, setTitleAr] = useState('');
@@ -101,6 +114,15 @@ export function PartDialog({
           titleAr: titleAr || undefined,
           description: description || undefined,
           ...pricing,
+          // Three distinct states, and they must stay distinct: a new key
+          // replaces the image, an explicit null clears it back to inheriting
+          // the course's, and omitting the field entirely leaves it alone so
+          // renaming a part cannot wipe its thumbnail.
+          ...(thumbnail.objectKey
+            ? { thumbnailKey: thumbnail.objectKey }
+            : clearThumbnail
+              ? { thumbnailKey: null }
+              : {}),
         });
 
         // Sections are a separate endpoint, so only call it when they moved.
@@ -195,6 +217,26 @@ export function PartDialog({
             />
           )}
         </Field>
+
+        {/* Thumbnail. Edit-only: the upload route is keyed on the part id,
+            which does not exist until the part is saved. */}
+        <ThumbnailField
+          upload={thumbnail}
+          label="Part thumbnail"
+          currentUrl={part?.thumbnailUrl ?? null}
+          inheritedFrom={part?.thumbnailKey ? undefined : "the course's thumbnail"}
+          onClear={
+            part?.thumbnailKey
+              ? () => {
+                  setClearThumbnail(true);
+                  thumbnail.reset();
+                }
+              : undefined
+          }
+          disabledReason={
+            editing ? undefined : 'Save the part first, then add its thumbnail.'
+          }
+        />
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Pricing" required>

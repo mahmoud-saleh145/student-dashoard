@@ -6,6 +6,7 @@ import { api } from '@/lib/api-client';
 import { queryKeys } from '@/lib/query-keys';
 import type { Paginated } from '@/types/api';
 import type {
+  AttachmentKind,
   AttachmentRow,
   ContentStatus,
   CourseStudentRow,
@@ -144,6 +145,68 @@ export function useLessonAttachments(lessonId: string | null) {
     queryFn: () => api.get<AttachmentRow[]>(`lessons/${lessonId}/attachments`),
     enabled: Boolean(lessonId),
   });
+}
+
+/**
+ * A section's own documents.
+ *
+ * Deliberately a separate query from the lecture list rather than a filtered
+ * view of one: the API keeps the two scopes apart, and a reader needs to see
+ * "this section has 2 files" independently of what its lectures carry.
+ */
+export function useSectionAttachments(sectionId: string | null) {
+  return useQuery({
+    queryKey: ['sections', 'attachments', sectionId],
+    queryFn: () => api.get<AttachmentRow[]>(`sections/${sectionId}/attachments`),
+    enabled: Boolean(sectionId),
+  });
+}
+
+/** Invalidates whichever attachment list the row belonged to. */
+function useAttachmentMutation<TInput>(perform: (input: TInput) => Promise<unknown>) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: perform,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['lessons', 'attachments'] }),
+        queryClient.invalidateQueries({ queryKey: ['sections', 'attachments'] }),
+      ]);
+    },
+  });
+}
+
+export function useCreateAttachment() {
+  return useAttachmentMutation<{
+    courseId: string;
+    /** Exactly one scope, or neither for a course-wide document. */
+    lessonId?: string;
+    sectionId?: string;
+    title: string;
+    kind: AttachmentKind;
+    objectKey: string;
+    mimeType?: string;
+    sizeBytes?: number;
+    isProtected?: boolean;
+    isDownloadable?: boolean;
+    isPreview?: boolean;
+  }>((input) => api.post('attachments', input));
+}
+
+export function useUpdateAttachment() {
+  return useAttachmentMutation<{
+    id: string;
+    title?: string;
+    isProtected?: boolean;
+    isDownloadable?: boolean;
+    isPreview?: boolean;
+    sortOrder?: number;
+  }>(({ id, ...body }) => api.patch(`attachments/${id}`, body));
+}
+
+export function useDeleteAttachment() {
+  return useAttachmentMutation<{ id: string }>(({ id }) => api.delete(`attachments/${id}`));
 }
 
 // ---------------------------------------------------------------------------

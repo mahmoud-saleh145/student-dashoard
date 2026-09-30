@@ -16,6 +16,9 @@ import type {
   LibraryPartRow,
 } from '@/types/commerce';
 
+import { ThumbnailField } from '@/features/thumbnails/thumbnail-field';
+import { useThumbnailUpload } from '@/features/thumbnails/upload';
+
 import { DocumentUploadField } from './document-upload-field';
 import {
   useCreateLibraryPackage,
@@ -289,6 +292,15 @@ export function LibraryPartDialog({
   // The object key comes from the upload, never from a person typing one.
   const upload = useLibraryUpload();
 
+  // Edit-only, like the course-part thumbnail: the route is keyed on the part
+  // id, which does not exist until the part is saved.
+  const thumbnail = useThumbnailUpload({
+    kind: 'library-part',
+    materialId,
+    partId: part?.id ?? 'unsaved',
+  });
+  const [clearThumbnail, setClearThumbnail] = useState(false);
+
   useEffect(() => {
     if (!open) return;
     setTitle(part?.title ?? '');
@@ -298,6 +310,8 @@ export function LibraryPartDialog({
     setPageCount(part?.pageCount != null ? String(part.pageCount) : '');
     setIsPreview(part?.isPreview ?? false);
     upload.reset();
+    thumbnail.reset();
+    setClearThumbnail(false);
     create.reset();
     update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -324,6 +338,15 @@ export function LibraryPartDialog({
           // current file attached on an edit that only changes the price.
           objectKey: upload.objectKey ?? undefined,
           pageCount: pageCount !== '' ? Number(pageCount) : undefined,
+          // Omitted leaves the image alone; null clears it back to inheriting
+          // the material's cover and then the library default. The default is
+          // resolved when the part is read, so clearing here never writes it
+          // onto the row.
+          ...(thumbnail.objectKey
+            ? { thumbnailKey: thumbnail.objectKey }
+            : clearThumbnail
+              ? { thumbnailKey: null }
+              : {}),
         });
       } else {
         await create.mutateAsync({
@@ -476,6 +499,30 @@ export function LibraryPartDialog({
           short-lived link tied to their account — no permanent or public URL is
           ever created, and the storage key is never sent to a student.
         </p>
+
+        {/* Thumbnail. Edit-only, like the course-part one: the upload route is
+            keyed on the part id, which does not exist until the part is saved. */}
+        <ThumbnailField
+          upload={thumbnail}
+          label="Cover image"
+          currentUrl={part?.thumbnailUrl ?? null}
+          inheritedFrom={
+            part?.thumbnailKey
+              ? undefined
+              : "the material's cover, or the library default"
+          }
+          onClear={
+            part?.thumbnailKey
+              ? () => {
+                  setClearThumbnail(true);
+                  thumbnail.reset();
+                }
+              : undefined
+          }
+          disabledReason={
+            part ? undefined : 'Save the document first, then add its cover image.'
+          }
+        />
 
         {(create.error ?? update.error) && Object.keys(errors).length === 0 ? (
           <p role="alert" className="text-sm font-medium text-danger">

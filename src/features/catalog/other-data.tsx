@@ -8,6 +8,7 @@ import { Field, TextInput } from '@/components/ui/field';
 import { ConfirmDialog, Modal } from '@/components/ui/overlay';
 import { Badge, PageHeader } from '@/components/ui/primitives';
 import { Tabs, TabPanel, useTabParam } from '@/components/ui/tabs';
+import { AcademicStructures } from '@/features/catalog/academic-structures';
 import { useToast } from '@/components/ui/toast';
 import {
   useAcademicYears,
@@ -38,13 +39,14 @@ export function OtherData() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Other data"
-        description="Subjects and academic years. Universities, colleges and departments are managed under Courses → Academic structure."
+        description="Subjects, and the year or level ladders that courses and students are filed under. Universities, colleges and departments are managed under Courses → Academic structure."
       />
 
       <Tabs
         tabs={[
           { id: 'subjects', label: 'Subjects' },
-          { id: 'years', label: 'Academic years' },
+          { id: 'structures', label: 'Years & levels' },
+          { id: 'years', label: 'All entries' },
         ]}
         active={tab}
         onChange={setTab}
@@ -52,6 +54,13 @@ export function OtherData() {
 
       <TabPanel id="subjects" active={tab}>
         <SubjectsPanel />
+      </TabPanel>
+
+      {/* The ladders themselves: which system a unit uses, how many entries
+          it has and what they are called. The flat list below stays as the
+          read-only view of every entry across every ladder. */}
+      <TabPanel id="structures" active={tab}>
+        <AcademicStructures />
       </TabPanel>
 
       <TabPanel id="years" active={tab}>

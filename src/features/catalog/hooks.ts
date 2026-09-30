@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api-client';
 import { queryKeys } from '@/lib/query-keys';
 import type {
+  AcademicStructure,
+  AcademicStructureKind,
   AcademicYear,
   Department,
   Faculty,
@@ -133,9 +135,61 @@ export function useCreateDepartment() {
 }
 
 export function useCreateAcademicYear() {
-  return useCatalogMutation<{ order: number; name: string; nameAr: string }>((input) =>
-    api.post('catalog/academic-years', input),
-  );
+  return useCatalogMutation<{
+    order: number;
+    name: string;
+    nameAr: string;
+    /** Omitted writes to the platform-wide ladder, as this form always did. */
+    structureId?: string;
+  }>((input) => api.post('catalog/academic-years', input));
+}
+
+// ---------------------------------------------------------------------------
+// Academic structures
+// ---------------------------------------------------------------------------
+
+/**
+ * Every ladder with its rungs.
+ *
+ * Admin-only, and not cached as long as the pickers above: an administrator
+ * editing structures expects to see their own change, and this screen is not
+ * on the hot path that the registration dropdowns are.
+ */
+export function useAcademicStructures() {
+  return useQuery({
+    queryKey: queryKeys.catalog.academicStructures,
+    queryFn: () => api.get<AcademicStructure[]>('catalog/academic-structures'),
+  });
+}
+
+export function useCreateAcademicStructure() {
+  return useCatalogMutation<{
+    kind: AcademicStructureKind;
+    universityId?: string;
+    facultyId?: string;
+    departmentId?: string;
+  }>((input) => api.post('catalog/academic-structures', input));
+}
+
+export function useUpdateAcademicStructure() {
+  return useCatalogMutation<{
+    id: string;
+    kind?: AcademicStructureKind;
+    isActive?: boolean;
+  }>(({ id, ...body }) => api.patch(`catalog/academic-structures/${id}`, body));
+}
+
+/**
+ * Replaces a ladder's rungs in one write: how many, and their names.
+ *
+ * A rung left out is deactivated rather than deleted, because students and
+ * courses point at it — the server does that, and the UI says so.
+ */
+export function useReplaceStructureEntries() {
+  return useCatalogMutation<{
+    id: string;
+    entries: { order: number; name: string; nameAr: string }[];
+  }>(({ id, entries }) => api.put(`catalog/academic-structures/${id}/entries`, { entries }));
 }
 
 export function useUpdateFaculty() {

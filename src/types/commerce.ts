@@ -361,6 +361,10 @@ export interface CoursePartRow {
   currency: string;
   sections: CoursePartSectionRef[];
   sectionCount: number;
+  /** The part's OWN thumbnail key, or null when it inherits the course's. */
+  thumbnailKey?: string | null;
+  /** Whichever image is in force — own or inherited — ready to render. */
+  thumbnailUrl?: string | null;
   entitlementCount: number;
   purchaseCount: number;
   createdAt: string;
@@ -398,6 +402,13 @@ export interface UpdateCoursePartInput {
   priceAmount?: number;
   isActive?: boolean;
   status?: ContentStatus;
+  /**
+   * Omit to leave the image alone, send a key to replace it, send null to
+   * clear it back to inheriting the course's. The three are distinct on
+   * purpose: collapsing null and undefined would make it impossible to rename
+   * a part without also wiping its thumbnail.
+   */
+  thumbnailKey?: string | null;
 }
 
 export interface CoursePartPurchaseRow {
@@ -465,6 +476,10 @@ export interface LibraryPartRow {
   isPreview: boolean;
   /** The object key itself is never sent to a client — only whether one exists. */
   hasDocument: boolean;
+  /** The part's OWN thumbnail, or null when it inherits. */
+  thumbnailKey?: string | null;
+  /** Whichever image is in force: own, then the material cover, then default. */
+  thumbnailUrl?: string | null;
   entitlementCount: number;
   createdAt: string;
 }

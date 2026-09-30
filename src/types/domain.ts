@@ -165,10 +165,47 @@ export interface Department extends NamedRef {
   studentCount?: number;
 }
 
+/** Whether a ladder is expressed as Years ("Third Year") or Levels ("Level 3"). */
+export type AcademicStructureKind = 'YEAR' | 'LEVEL';
+
 export interface AcademicYear extends NamedRef {
   order: number;
   isActive: boolean;
   studentCount?: number;
+  /**
+   * Present on the public list, absent on admin rows. Sent so the picker can
+   * label itself "Year" or "Level" without inferring it from the names, which
+   * breaks the moment an administrator writes them in Arabic only.
+   */
+  kind?: AcademicStructureKind;
+}
+
+/**
+ * One academic ladder, owned by exactly one unit of the catalogue.
+ *
+ * `scopeKey` is the server's uniqueness handle — "platform",
+ * "university:<id>", "faculty:<id>" or "department:<id>" — and is what
+ * guarantees a unit cannot end up with two ladders. A unit with none inherits
+ * its parent's, all the way up to the platform ladder.
+ */
+export interface AcademicStructure {
+  id: string;
+  kind: AcademicStructureKind;
+  scopeKey: string;
+  isActive: boolean;
+  universityId: string | null;
+  facultyId: string | null;
+  departmentId: string | null;
+  university: NamedRef | null;
+  faculty: NamedRef | null;
+  department: NamedRef | null;
+  entries: {
+    id: string;
+    order: number;
+    name: string;
+    nameAr: string;
+    isActive: boolean;
+  }[];
 }
 
 export interface Subject extends NamedRef {
@@ -301,6 +338,11 @@ export interface AttachmentRow {
   id: string;
   courseId: string;
   lessonId: string | null;
+  /**
+   * Set when the document belongs to a section as a whole rather than to one
+   * lecture. At most one of the two is ever set; both null means course-wide.
+   */
+  sectionId: string | null;
   title: string;
   kind: AttachmentKind;
   sizeBytes: number | null;
@@ -572,6 +614,18 @@ export interface PlatformSettings {
   'contact.whatsapp': string;
   'contact.facebook': string;
   'contact.email': string;
+  /**
+   * Object key of the fallback image for library documents with no cover of
+   * their own. Empty means no default. Applied when a document is READ, so it
+   * never overwrites a cover an administrator chose.
+   */
+  'library.defaultThumbnailKey': string;
 }
+
+// NOTE: the backend's SettingShape also carries wallet.minimumRecharge,
+// wallet.maximumRecharge and wallet.allowAdminOverrideMinimum, which this
+// interface has never listed. Settings are PATCHed as a partial, so the
+// omission does not drop them — but it does mean the dashboard cannot edit
+// them, which looks like pre-existing drift rather than a decision.
 
 export type SettingKey = keyof PlatformSettings;

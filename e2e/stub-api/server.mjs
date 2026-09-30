@@ -86,6 +86,13 @@ const lastRequest = { generateCodes: null, libraryPart: null, materialPatch: nul
 const control = {
   /** Makes the storage PUT fail, for the upload-failure path. */
   failUpload: false,
+  /**
+   * attachmentId -> row. Course material, keyed by scope so the two lists the
+   * dashboard shows — a lecture's own documents and a section's — are genuinely
+   * separate here rather than one list filtered twice.
+   */
+  attachments: new Map(),
+  nextAttachmentId: 1,
   /** Library material status, mutated by PATCH so publishing is a real round trip. */
   materialStatus: 'PUBLISHED',
   // Arms the next transcode to fail, so the FAILED + retry path is testable.
@@ -821,6 +828,8 @@ const server = createServer(async (req, res) => {
       lastRequest.materialPatch = null;
       control.failProcessing = false;
       control.videos.clear();
+      control.attachments.clear();
+      control.nextAttachmentId = 1;
       lastRequest.generateCodes = null;
       lastRequest.libraryPart = null;
       control.expireAccessTokenOnce = false;
@@ -1109,6 +1118,101 @@ const server = createServer(async (req, res) => {
   //
   // Refused to a teacher by the `/storage/uploads/library-document` prefix in
   // the admin-only list, which this path sits under.
+  // Streaming attachment upload. Drains the body and names the key itself,
+  // exactly as the real endpoint does — the dashboard must never be able to
+  // choose a storage key.
+  if (path === '/storage/uploads/attachment/content' && method === 'POST') {
+    let sizeBytes = 0;
+    await new Promise((resolve) => {
+      req.on('data', (chunk) => {
+        sizeBytes += chunk.length;
+      });
+      req.on('end', resolve);
+      req.on('error', resolve);
+    });
+
+    if (control.failUpload) {
+      return fail(res, 502, 'UPLOAD_FAILED', 'Storage refused the upload.');
+    }
+
+    const courseId = url.searchParams.get('courseId') ?? 'course-1';
+    const filename = url.searchParams.get('filename') ?? 'file.pdf';
+    const ext = filename.includes('.') ? `.${filename.split('.').pop().toLowerCase()}` : '.bin';
+
+    return ok(res, {
+      objectKey: `attachments/${courseId}/stub-${control.nextAttachmentId}${ext}`,
+      sizeBytes,
+    });
+  }
+
+  if (path === '/attachments' && method === 'POST') {
+    const body = await readBody(req);
+    const id = `att-${control.nextAttachmentId++}`;
+    const row = {
+      id,
+      courseId: body.courseId,
+      lessonId: body.lessonId ?? null,
+      sectionId: body.sectionId ?? null,
+      title: body.title,
+      kind: body.kind ?? 'PDF',
+      sizeBytes: body.sizeBytes ?? null,
+      pageCount: null,
+      protected: body.isProtected ?? true,
+      isProtected: body.isProtected ?? true,
+      isDownloadable: (body.isProtected ?? true) ? false : (body.isDownloadable ?? true),
+      isPreview: body.isPreview ?? false,
+      locked: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    // The API refuses both scopes at once; so does this, or the test would
+    // pass against a stub more permissive than production.
+    if (row.lessonId && row.sectionId) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'a document belongs to a lecture or to a section, not both');
+    }
+
+    control.attachments.set(id, row);
+    return ok(res, row);
+  }
+
+  const attachmentPatch = path.match(/^\/attachments\/([^/]+)$/);
+  if (attachmentPatch && method === 'PATCH') {
+    const body = await readBody(req);
+    const row = control.attachments.get(attachmentPatch[1]);
+    if (!row) return fail(res, 404, 'NOT_FOUND', 'Attachment not found.');
+    if (body.title !== undefined) row.title = body.title;
+    if (body.isPreview !== undefined) row.isPreview = body.isPreview;
+    if (body.isProtected !== undefined) {
+      row.isProtected = body.isProtected;
+      row.protected = body.isProtected;
+      if (body.isProtected) row.isDownloadable = false;
+    }
+    return ok(res, row);
+  }
+
+  if (attachmentPatch && method === 'DELETE') {
+    control.attachments.delete(attachmentPatch[1]);
+    return ok(res, { ok: true });
+  }
+
+  const lessonAttachments = path.match(/^\/lessons\/([^/]+)\/attachments$/);
+  if (lessonAttachments && method === 'GET') {
+    const lessonId = lessonAttachments[1];
+    return ok(
+      res,
+      [...control.attachments.values()].filter((row) => row.lessonId === lessonId),
+    );
+  }
+
+  const sectionAttachments = path.match(/^\/sections\/([^/]+)\/attachments$/);
+  if (sectionAttachments && method === 'GET') {
+    const sectionId = sectionAttachments[1];
+    return ok(
+      res,
+      [...control.attachments.values()].filter((row) => row.sectionId === sectionId),
+    );
+  }
+
   if (path === '/storage/uploads/library-document/content' && method === 'POST') {
     let sizeBytes = 0;
     await new Promise((resolve) => {

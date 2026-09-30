@@ -10,11 +10,13 @@ import { ConfirmDialog, Modal } from '@/components/ui/overlay';
 import { Badge, Card, CardBody, CardHeader, SectionTitle } from '@/components/ui/primitives';
 import { EmptyState, ErrorState, Skeleton } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
+import { AttachmentsPanel } from '@/features/courses/attachments-panel';
 import { LessonAnalyticsDrawer } from '@/features/courses/lesson-analytics-drawer';
 import {
   useDeleteSection,
   useCourseSections,
   useCreateLesson,
+  useUpdateLesson,
   useCreateSection,
   useDeleteLesson,
   useSetLessonStatus,
@@ -58,6 +60,7 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
   const deleteSection = useDeleteSection(courseId);
   const updateSection = useUpdateSection(courseId);
   const setLessonStatus = useSetLessonStatus(courseId);
+  const updateLesson = useUpdateLesson(courseId);
   const deleteLesson = useDeleteLesson(courseId);
 
   const [addingSection, setAddingSection] = useState(false);
@@ -71,6 +74,11 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
   >(null);
   const [analyticsLesson, setAnalyticsLesson] = useState<LessonRow | null>(null);
   const [videoLesson, setVideoLesson] = useState<LessonRow | null>(null);
+  // Documents. Two separate pieces of state rather than one tagged union,
+  // because a reader can legitimately have a section's documents open and
+  // then jump to a lecture's — collapsing them would close the first.
+  const [docsLesson, setDocsLesson] = useState<LessonRow | null>(null);
+  const [docsSection, setDocsSection] = useState<SectionRow | null>(null);
 
   const canDelete = isAdmin || capabilities.canDeleteLectures;
 
@@ -82,6 +90,28 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
       toast.success('Section added');
       setSectionTitle('');
       setAddingSection(false);
+    } catch (error) {
+      toast.error(error);
+    }
+  }
+
+  /**
+   * Free ⇄ protected on an existing lecture.
+   *
+   * `isPreview` is the backend's name for it and has always been honoured by
+   * the playback authorisation path — a preview lesson skips the enrolment and
+   * section-entitlement checks while still minting a per-viewer ticket and
+   * still being device-bound. What was missing was any way to set it.
+   */
+  async function changeLessonFree(lesson: LessonRow, isPreview: boolean) {
+    try {
+      await updateLesson.mutateAsync({ lessonId: lesson.id, isPreview });
+      toast.success(
+        isPreview ? 'Lecture is now free' : 'Lecture now requires access',
+        isPreview
+          ? 'Anyone signed in can watch it, and it does not use up their play allowance.'
+          : 'Only students who own this course or its part can watch it.',
+      );
     } catch (error) {
       toast.error(error);
     }
@@ -239,11 +269,14 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
             busy={setLessonStatus.isPending || updateSection.isPending}
             onAddLesson={() => setAddingLessonTo(section)}
             onOpenVideo={setVideoLesson}
+            onOpenLessonDocs={setDocsLesson}
+            onOpenSectionDocs={setDocsSection}
             onSectionStatus={(status) => void changeSectionStatus(section, status)}
             onDeleteSection={() =>
               setConfirming({ kind: 'delete-section', id: section.id, title: section.title })
             }
             onLessonStatus={(lesson, status) => void changeLessonStatus(lesson, status)}
+            onLessonFree={(lesson, isPreview) => void changeLessonFree(lesson, isPreview)}
             onArchiveLesson={(lesson) =>
               setConfirming({ kind: 'archive-lesson', id: lesson.id, title: lesson.title })
             }
@@ -311,6 +344,44 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
         lesson={analyticsLesson}
         onClose={() => setAnalyticsLesson(null)}
       />
+
+      {/* Documents. The panel is the same for both scopes; only the id it
+          creates rows with differs. */}
+      <Modal
+        open={docsLesson !== null}
+        onClose={() => setDocsLesson(null)}
+        title="Lecture documents"
+        description={
+          docsLesson
+            ? `Files that belong to “${docsLesson.title}”. A student needs access to this lecture’s section to open a protected one.`
+            : undefined
+        }
+      >
+        {docsLesson ? (
+          <AttachmentsPanel
+            courseId={courseId}
+            scope={{ kind: 'lesson', lessonId: docsLesson.id }}
+          />
+        ) : null}
+      </Modal>
+
+      <Modal
+        open={docsSection !== null}
+        onClose={() => setDocsSection(null)}
+        title="Section documents"
+        description={
+          docsSection
+            ? `Files that belong to “${docsSection.title}” as a whole, separately from any lecture inside it.`
+            : undefined
+        }
+      >
+        {docsSection ? (
+          <AttachmentsPanel
+            courseId={courseId}
+            scope={{ kind: 'section', sectionId: docsSection.id }}
+          />
+        ) : null}
+      </Modal>
     </div>
   );
 }
@@ -321,9 +392,12 @@ function SectionCard({
   busy,
   onAddLesson,
   onOpenVideo,
+  onOpenLessonDocs,
+  onOpenSectionDocs,
   onSectionStatus,
   onDeleteSection,
   onLessonStatus,
+  onLessonFree,
   onArchiveLesson,
   onDeleteLesson,
   onOpenAnalytics,
@@ -333,9 +407,12 @@ function SectionCard({
   busy: boolean;
   onAddLesson: () => void;
   onOpenVideo: (lesson: LessonRow) => void;
+  onOpenLessonDocs: (lesson: LessonRow) => void;
+  onOpenSectionDocs: (section: SectionRow) => void;
   onSectionStatus: (status: ContentStatus) => void;
   onDeleteSection: () => void;
   onLessonStatus: (lesson: LessonRow, status: ContentStatus) => void;
+  onLessonFree: (lesson: LessonRow, isPreview: boolean) => void;
   onArchiveLesson: (lesson: LessonRow) => void;
   onDeleteLesson: (lesson: LessonRow) => void;
   onOpenAnalytics: (lesson: LessonRow) => void;
@@ -344,6 +421,10 @@ function SectionCard({
   const sectionVisible = section.status === 'PUBLISHED';
 
   const sectionItems: ActionMenuItem[] = [
+    // Section-level documents: files that belong to the whole section rather
+    // than to one of its lectures. Kept distinct in the menu wording because
+    // the two are separate lists with separate access rules.
+    { label: 'Section documents', onSelect: () => onOpenSectionDocs(section) },
     sectionVisible
       ? {
           label: 'Hide from students',
@@ -394,6 +475,18 @@ function SectionCard({
                   onSelect: () => onOpenVideo(lesson),
                 },
                 { label: 'Viewers', onSelect: () => onOpenAnalytics(lesson) },
+                { label: 'Lecture documents', onSelect: () => onOpenLessonDocs(lesson) },
+                // Flipping an existing lecture between free and protected.
+                // Exact wording matters here: this is the difference between
+                // a lecture anyone can watch and one that consumes a paid
+                // entitlement, and it is reversible either way.
+                {
+                  label: lesson.isPreview
+                    ? 'Make paid (require course access)'
+                    : 'Make free for everyone',
+                  onSelect: () => onLessonFree(lesson, !lesson.isPreview),
+                  disabled: busy,
+                },
               ];
               if (lesson.status === 'ARCHIVED') {
                 items.push({
@@ -478,6 +571,10 @@ function AddLessonModal({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [publishNow, setPublishNow] = useState(true);
+  // Free lectures are playable without enrolment or a part purchase. The
+  // backend already understood this as `isPreview`; there was simply no
+  // control for it, so every lecture was created protected.
+  const [isFree, setIsFree] = useState(false);
 
   // The dialog has two steps, because the API does. `videos/uploads/init`
   // takes a `lessonId`, so there is nothing to attach a video to until the
@@ -495,6 +592,7 @@ function AddLessonModal({
         title: title.trim(),
         description: description.trim() || undefined,
         status: publishNow ? 'PUBLISHED' : 'DRAFT',
+        isPreview: isFree,
       });
       toast.success('Lecture added', 'Now add its video, or close and do it later.');
       setCreated(lesson);
@@ -507,6 +605,7 @@ function AddLessonModal({
     setTitle('');
     setDescription('');
     setPublishNow(true);
+    setIsFree(false);
     setCreated(null);
     onClose();
   }
@@ -572,6 +671,17 @@ function AddLessonModal({
                 publishNow
                   ? 'Students with access see it as soon as its video is ready.'
                   : 'Saved as a draft — hidden from students until you publish it.'
+              }
+            />
+
+            <Switch
+              checked={isFree}
+              onChange={setIsFree}
+              label="Free for everyone"
+              description={
+                isFree
+                  ? 'Any signed-in student can watch this, enrolled or not, and it does not use up their play allowance. It is still delivered through a signed per-viewer ticket and still device-bound — nothing about it is a public video URL.'
+                  : 'Only students who own this course or its part can watch it.'
               }
             />
           </>
