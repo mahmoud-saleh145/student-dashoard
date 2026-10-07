@@ -46,7 +46,6 @@ export function EditCourseDialog({
   const toast = useToast();
   const update = useUpdateCourse(course.id);
 
-  const years = useAcademicYears();
   const subjects = useSubjects();
 
   const [title, setTitle] = useState('');
@@ -66,6 +65,20 @@ export function EditCourseDialog({
   // create dialog — the same constraint the part dialog documents.
   const thumbnail = useThumbnailUpload({ kind: 'course', courseId: course.id });
   const [clearThumbnail, setClearThumbnail] = useState(false);
+
+  /**
+   * The ladder depends on the unit, so the list follows the structure the
+   * administrator is editing — including one they are changing right now.
+   * `departmentIds[0]` because the API resolves exactly one owner.
+   */
+  const years = useAcademicYears({
+    universityId: structure.universityId || undefined,
+    facultyId: structure.facultyId || undefined,
+    departmentId: structure.departmentIds[0] || undefined,
+  });
+
+  const ladderKind = years.data?.[0]?.kind ?? 'YEAR';
+  const rungLabel = ladderKind === 'LEVEL' ? 'Level' : 'Year';
 
   // Re-seeded whenever the dialog opens, so reopening after a cancel shows the
   // stored values rather than the abandoned edit.
@@ -89,6 +102,35 @@ export function EditCourseDialog({
     setFieldErrors({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, course]);
+
+  /**
+   * Drop a rung the unit's ladder does not contain.
+   *
+   * Two ways to get here, and both are the bug this whole change is about: a
+   * course stored against a year belonging to a different structure, and an
+   * administrator moving the course into a college whose ladder counts in
+   * levels while the field still holds "First Year". The backend refuses both,
+   * so leaving the value would make the dialog unsaveable — and a `<select>`
+   * displaying a value that is not among its own options is worse than an empty
+   * one, because it looks chosen.
+   *
+   * Only once the list has actually loaded and has rows: an empty response while
+   * a request is in flight would otherwise wipe a perfectly good selection.
+   */
+  useEffect(() => {
+    if (!open || !academicYearId || years.isLoading) return;
+
+    const options = years.data ?? [];
+    if (options.length === 0) return;
+    if (options.some((year) => year.id === academicYearId)) return;
+
+    setAcademicYearId('');
+    setFieldErrors((previous) => ({
+      ...previous,
+      academicYearId: `This course was filed under a ${ladderKind === 'LEVEL' ? 'level' : 'year'} its academic structure does not have. Choose the right one, or leave it unset.`,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, academicYearId, years.isLoading, years.data]);
 
   async function submit() {
     if (title.trim().length < 3) {
@@ -265,12 +307,15 @@ export function EditCourseDialog({
         ) : null}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Academic year">
+          <Field
+            label={`Academic ${rungLabel.toLowerCase()}`}
+            error={fieldErrors.academicYearId}
+          >
             {({ id }) => (
               <Select
                 id={id}
                 value={academicYearId}
-                placeholder="Not set"
+                placeholder={years.isLoading ? 'Loading…' : 'Not set'}
                 options={(years.data ?? []).map((year) => ({
                   value: year.id,
                   label: year.name,

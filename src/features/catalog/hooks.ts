@@ -54,10 +54,50 @@ export function useDepartments(facultyId: string | null | undefined) {
   });
 }
 
-export function useAcademicYears() {
+/**
+ * The one unit of scope a ladder can be asked about.
+ *
+ * `academicYears` on the API takes exactly one owner and refuses two, so this
+ * is deliberately singular — mirroring `AcademicStructureValue`, where the
+ * plural lives on departments because a course really can be offered to
+ * several.
+ */
+export interface AcademicYearScope {
+  universityId?: string | null;
+  facultyId?: string | null;
+  /** One department, not many: the API resolves a single owner. */
+  departmentId?: string | null;
+}
+
+/**
+ * The rungs a unit offers — its years, or its levels.
+ *
+ * Unscoped, this returns the platform-wide ladder, which is what every filter
+ * dropdown wants: a notifications or audience filter lists everything that
+ * exists, not one college's subset.
+ *
+ * Pass a scope where the ladder *depends* on the unit — the course form. A
+ * faculty that counts in levels has its own structure, and asking for the
+ * platform list there is how "First Year, Second Year" ended up showing
+ * instead of "Level 1…Level 6".
+ */
+export function useAcademicYears(scope?: AcademicYearScope) {
+  // Most specific wins, which is the same precedence the API resolves by.
+  const query =
+    scope?.departmentId
+      ? { departmentId: scope.departmentId }
+      : scope?.facultyId
+        ? { facultyId: scope.facultyId }
+        : scope?.universityId
+          ? { universityId: scope.universityId }
+          : {};
+
+  const cacheScope =
+    query.departmentId ?? query.facultyId ?? query.universityId ?? 'platform';
+
   return useQuery({
-    queryKey: queryKeys.catalog.academicYears,
-    queryFn: () => api.get<AcademicYear[]>('catalog/academic-years'),
+    queryKey: queryKeys.catalog.academicYears(cacheScope),
+    queryFn: () => api.get<AcademicYear[]>('catalog/academic-years', { query }),
     staleTime: CATALOG_STALE_TIME,
   });
 }

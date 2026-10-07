@@ -19,7 +19,18 @@ export const queryKeys = {
     universities: ['catalog', 'universities'] as const,
     faculties: (universityId: string) => ['catalog', 'faculties', universityId] as const,
     departments: (facultyId: string) => ['catalog', 'departments', facultyId] as const,
-    academicYears: ['catalog', 'academic-years'] as const,
+    /**
+     * Scoped, because `GET catalog/academic-years` resolves a unit's own ladder
+     * and falls back up the hierarchy — so the platform list and a faculty's
+     * level list are different answers to the same URL. Keyed on the resolved
+     * scope so the two cannot overwrite each other in the cache; the argument
+     * defaults to 'platform', which is what every unscoped caller wants.
+     *
+     * 'catalog' stays first so the prefix invalidation in `useCatalogMutation`
+     * still reaches every scope after a structure is edited.
+     */
+    academicYears: (scope: string = 'platform') =>
+      ['catalog', 'academic-years', scope] as const,
     academicStructures: ['catalog', 'academic-structures'] as const,
   },
 

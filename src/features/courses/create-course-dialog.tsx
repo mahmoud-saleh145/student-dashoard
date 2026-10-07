@@ -64,10 +64,36 @@ export function CreateCourseDialog({
   const createCourse = useCreateCourse();
 
   const teachers = useTeacherOptions();
-  const years = useAcademicYears();
   const subjects = useSubjects();
 
   const [structure, setStructure] = useState<AcademicStructureValue>(EMPTY_STRUCTURE);
+
+  /**
+   * The ladder depends on the unit, so the year list has to follow it.
+   *
+   * Unscoped, this returns the platform ladder — five rows of "First Year" —
+   * whatever the administrator picked. That hid a faculty's own ladder
+   * entirely: a college counting in levels showed years it does not have, and
+   * the levels underneath were simply not on screen to choose from.
+   *
+   * `departmentIds[0]` because the API resolves exactly one owner, and a course
+   * offered to several departments is filed under one ladder anyway.
+   */
+  const years = useAcademicYears({
+    universityId: structure.universityId || undefined,
+    facultyId: structure.facultyId || undefined,
+    departmentId: structure.departmentIds[0] || undefined,
+  });
+
+  /**
+   * "Year" or "Level" from the structure's own `kind`.
+   *
+   * Sent by the API precisely so the control can label itself, and inferring it
+   * from the names breaks the moment an administrator writes them in Arabic
+   * only — which is the whole reason `kind` exists.
+   */
+  const ladderKind = years.data?.[0]?.kind ?? 'YEAR';
+  const rungLabel = ladderKind === 'LEVEL' ? 'Level' : 'Year';
 
   /**
    * The image field is shown here but cannot be used yet.
@@ -89,6 +115,7 @@ export function CreateCourseDialog({
     watch,
     reset,
     setError,
+    setValue,
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -96,6 +123,19 @@ export function CreateCourseDialog({
   });
 
   const isFree = watch('isFree');
+
+  /**
+   * Changing the unit invalidates any rung already chosen.
+   *
+   * The picker cascades downwards (college → departments) precisely because a
+   * rung belongs to one ladder, so keeping the old selection would post an id
+   * that is not among the new options — a select showing a value it does not
+   * offer, and a create the server refuses.
+   */
+  function changeStructure(next: AcademicStructureValue) {
+    setStructure(next);
+    setValue('academicYearId', '');
+  }
 
   async function onSubmit(values: FormValues) {
     try {
@@ -216,16 +256,23 @@ export function CreateCourseDialog({
 
         <AcademicStructurePicker
           value={structure}
-          onChange={setStructure}
+          onChange={changeStructure}
           disabled={createCourse.isPending}
         />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Academic year">
+          <Field
+            label={`Academic ${rungLabel.toLowerCase()}`}
+            hint={
+              years.data && years.data.length === 0
+                ? 'This unit has no academic structure yet, so there is nothing to choose.'
+                : undefined
+            }
+          >
             {({ id }) => (
               <Select
                 id={id}
-                placeholder="Not set"
+                placeholder={years.isLoading ? 'Loading…' : 'Not set'}
                 options={(years.data ?? []).map((year) => ({
                   value: year.id,
                   label: year.name,

@@ -107,7 +107,7 @@ export function CourseDetail({ courseId }: { courseId: string }) {
     }
   }
 
-  const actions = visibilityActionsFor(data.status);
+  const actions = visibilityActionsFor(data.status, data.counts.sections);
 
   return (
     <div className="flex flex-col gap-6">
@@ -322,7 +322,7 @@ interface VisibilityAction {
   successBody: string;
 }
 
-function visibilityActionsFor(status: string): VisibilityAction[] {
+function visibilityActionsFor(status: string, sectionCount: number): VisibilityAction[] {
   if (status === 'ARCHIVED') {
     return [
       {
@@ -357,10 +357,17 @@ function visibilityActionsFor(status: string): VisibilityAction[] {
       label: status === 'HIDDEN' ? 'Make visible' : 'Publish course',
       variant: 'primary',
       confirmTitle: status === 'HIDDEN' ? 'Make this course visible?' : 'Publish this course?',
+      // Publishing an empty course is allowed — a course is often announced
+      // before its lectures are recorded, and the students who join early are
+      // the point. So this warns rather than blocks, and says what they will
+      // see. Mirrors the wording the Library already uses for the same choice.
       confirmBody:
-        'It will be listed in the catalogue and students matching its academic year will be able to join it.',
+        sectionCount === 0
+          ? 'It will be listed in the catalogue and students will be able to join it — but it has no sections yet, so they will find it empty until you add lectures. Publish now if you mean to announce it first and fill it in after.'
+          : 'It will be listed in the catalogue and students matching its academic year will be able to join it.',
       successTitle: 'Course is visible',
-      successBody: 'Students can now find it.',
+      successBody:
+        sectionCount === 0 ? 'Students can find it. It has no sections yet.' : 'Students can now find it.',
     });
   }
 
