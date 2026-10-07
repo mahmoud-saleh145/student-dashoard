@@ -81,9 +81,9 @@ export function AcademicStructures() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs text-muted">
           Each structure is one ladder of years or levels. A university, college or department
-          without its own uses the one above it, so a single platform-wide structure is enough
-          unless a faculty counts differently. The number of entries and their names are yours
-          to set — there is no fixed four.
+          without its own uses the one above it, and each of those can have only one. You may
+          keep several platform-wide structures side by side. The number of entries and their
+          names are yours to set — there is no fixed four.
         </p>
         <Button size="sm" onClick={() => setCreating(true)}>
           Add structure
@@ -110,7 +110,7 @@ export function AcademicStructures() {
               <li
                 key={structure.id}
                 className="rounded-lg border border-line bg-surface p-4"
-                data-testid={`structure-${structure.scopeKey}`}
+                data-testid={`structure-${structure.id}`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
