@@ -17,6 +17,8 @@ import {
 import { useAcademicYears, useSubjects } from '@/features/catalog/hooks';
 import { useCreateCourse } from '@/features/courses/hooks';
 import { useTeacherOptions } from '@/features/teachers/hooks';
+import { ThumbnailField } from '@/features/thumbnails/thumbnail-field';
+import { useThumbnailUpload } from '@/features/thumbnails/upload';
 import { ApiError } from '@/lib/errors';
 
 /**
@@ -66,6 +68,20 @@ export function CreateCourseDialog({
   const subjects = useSubjects();
 
   const [structure, setStructure] = useState<AcademicStructureValue>(EMPTY_STRUCTURE);
+
+  /**
+   * The image field is shown here but cannot be used yet.
+   *
+   * The upload route is keyed on the course id and the object key is filed
+   * under `thumbnails/courses/<courseId>/`, but the id is a cuid the backend
+   * mints on insert — there is nothing to upload against before the course
+   * exists. Offering it disabled, with the reason stated, is what the part
+   * dialog does for the same reason, and it beats hiding the control and having
+   * the field appear only after a redirect.
+   *
+   * The placeholder id is never sent: the picker button is disabled.
+   */
+  const thumbnail = useThumbnailUpload({ kind: 'course', courseId: 'unsaved' });
 
   const {
     register,
@@ -191,6 +207,12 @@ export function CreateCourseDialog({
             />
           )}
         </Field>
+
+        <ThumbnailField
+          upload={thumbnail}
+          label="Course image"
+          disabledReason="Save the course first, then add its image."
+        />
 
         <AcademicStructurePicker
           value={structure}

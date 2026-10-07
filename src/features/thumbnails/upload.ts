@@ -30,6 +30,7 @@ export const THUMBNAIL_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as cons
 export const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;
 
 export type ThumbnailTarget =
+  | { kind: 'course'; courseId: string }
   | { kind: 'course-part'; courseId: string; partId: string }
   | { kind: 'library-part'; materialId: string; partId: string }
   | { kind: 'library-default' };
@@ -75,6 +76,11 @@ export function validateThumbnail(file: File): string | null {
 
 function routeFor(target: ThumbnailTarget): { path: string; query: URLSearchParams } {
   switch (target.kind) {
+    case 'course':
+      return {
+        path: '/api/upload/course-thumbnail',
+        query: new URLSearchParams({ courseId: target.courseId }),
+      };
     case 'course-part':
       return {
         path: '/api/upload/course-part-thumbnail',

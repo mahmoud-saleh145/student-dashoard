@@ -45,6 +45,12 @@ export interface CourseTeacherRow {
 
 export interface CourseDetail extends Omit<CourseSummary, 'teachers'> {
   teachers: CourseTeacherRow[];
+  /**
+   * Resolved from `thumbnailKey` by the API. The list endpoint returns only the
+   * key, so this is restated here rather than added to `CourseSummary` — a
+   * course list would otherwise promise a URL it never receives.
+   */
+  thumbnailUrl: string | null;
   /** Flattened out of the join rows by `detailForStaff`. */
   departments: { id: string; name: string; facultyId: string }[];
   facultyId: string | null;
@@ -264,6 +270,14 @@ export interface CourseFormValues {
    * partial edit cannot wipe a course's structure.
    */
   departmentIds?: string[];
+  /**
+   * The course image, as the object key the upload route returned.
+   *
+   * Three states, matching `departmentIds` above: a key replaces the image, an
+   * explicit `null` clears it, and omitting the field leaves it alone. The
+   * dashboard never names a key itself.
+   */
+  thumbnailKey?: string | null;
   price?: number;
   isFree?: boolean;
   enrollmentMethods: string[];

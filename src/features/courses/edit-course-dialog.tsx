@@ -12,6 +12,8 @@ import {
 } from '@/features/catalog/academic-structure-picker';
 import { useAcademicYears, useSubjects } from '@/features/catalog/hooks';
 import { useUpdateCourse, type CourseDetail } from '@/features/courses/hooks';
+import { ThumbnailField } from '@/features/thumbnails/thumbnail-field';
+import { useThumbnailUpload } from '@/features/thumbnails/upload';
 import { ApiError } from '@/lib/errors';
 
 /**
@@ -60,6 +62,11 @@ export function EditCourseDialog({
   });
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
+  // The upload route is keyed on the course id, which exists here but not in the
+  // create dialog — the same constraint the part dialog documents.
+  const thumbnail = useThumbnailUpload({ kind: 'course', courseId: course.id });
+  const [clearThumbnail, setClearThumbnail] = useState(false);
+
   // Re-seeded whenever the dialog opens, so reopening after a cancel shows the
   // stored values rather than the abandoned edit.
   useEffect(() => {
@@ -76,7 +83,11 @@ export function EditCourseDialog({
       facultyId: course.facultyId ?? '',
       departmentIds: course.departments.map((d) => d.id),
     });
+    // A pending upload belongs to the dialog that started it, not the next one.
+    thumbnail.reset();
+    setClearThumbnail(false);
     setFieldErrors({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, course]);
 
   async function submit() {
@@ -110,6 +121,16 @@ export function EditCourseDialog({
     }
     if ((structure.facultyId || null) !== (course.facultyId ?? null)) {
       body.facultyId = structure.facultyId;
+    }
+
+    // Three distinct states, and they must stay distinct: a new key replaces the
+    // image, an explicit null clears it, and omitting the field leaves it alone
+    // so an unrelated edit can never wipe a course's thumbnail. The backend
+    // deletes the previous R2 object when the key actually changes.
+    if (thumbnail.objectKey) {
+      body.thumbnailKey = thumbnail.objectKey;
+    } else if (clearThumbnail) {
+      body.thumbnailKey = null;
     }
 
     const storedDepartments = [...course.departments.map((d) => d.id)].sort();
@@ -216,6 +237,20 @@ export function EditCourseDialog({
             />
           )}
         </Field>
+
+        <ThumbnailField
+          upload={thumbnail}
+          label="Course image"
+          currentUrl={course.thumbnailUrl ?? null}
+          onClear={
+            course.thumbnailKey
+              ? () => {
+                  setClearThumbnail(true);
+                  thumbnail.reset();
+                }
+              : undefined
+          }
+        />
 
         <AcademicStructurePicker
           value={structure}
