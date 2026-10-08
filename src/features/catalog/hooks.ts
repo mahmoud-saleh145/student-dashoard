@@ -232,6 +232,19 @@ export function useReplaceStructureEntries() {
   }>(({ id, entries }) => api.put(`catalog/academic-structures/${id}/entries`, { entries }));
 }
 
+/**
+ * Replaces the colleges explicitly pinned to a ladder.
+ *
+ * The whole set is sent every time, and an empty array clears it. A college
+ * pinned to another ladder is moved here by the server rather than rejected —
+ * a college can only have one ladder, so refusing would only force a detour.
+ */
+export function useSetStructureFaculties() {
+  return useCatalogMutation<{ id: string; facultyIds: string[] }>(({ id, facultyIds }) =>
+    api.put(`catalog/academic-structures/${id}/faculties`, { facultyIds }),
+  );
+}
+
 export function useUpdateFaculty() {
   return useCatalogMutation<{
     id: string;

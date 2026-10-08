@@ -10,14 +10,18 @@ import { CardsSkeleton, ErrorState } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import {
   useAcademicStructures,
+  useCatalogTree,
   useCreateAcademicStructure,
-  useDepartments,
-  useFaculties,
   useReplaceStructureEntries,
+  useSetStructureFaculties,
   useUniversities,
   useUpdateAcademicStructure,
 } from '@/features/catalog/hooks';
-import type { AcademicStructure, AcademicStructureKind } from '@/types/domain';
+import type {
+  AcademicStructure,
+  AcademicStructureFacultyOverride,
+  AcademicStructureKind,
+} from '@/types/domain';
 
 /**
  * Academic structures.
@@ -43,12 +47,45 @@ const KIND_OPTIONS: { value: AcademicStructureKind; label: string }[] = [
   { value: 'LEVEL', label: 'Levels — “Level 1”, “Level 2”' },
 ];
 
-/** Names a structure's owner for a reader, rather than showing its scopeKey. */
+/**
+ * Names a structure's DEFAULT owner for a reader, rather than showing its
+ * scopeKey.
+ *
+ * "Default" is the operative word: ownership decides who inherits this ladder,
+ * and an explicit college pin (see `overrideSummary`) overrides that. Keeping
+ * the two phrased differently is what stops an administrator reading the owner
+ * line as the complete answer.
+ */
 function ownerLabel(structure: AcademicStructure): string {
   if (structure.department) return `Department · ${structure.department.name}`;
   if (structure.faculty) return `College · ${structure.faculty.name}`;
   if (structure.university) return `University · ${structure.university.name}`;
-  return 'Platform-wide (inherited by every unit without its own)';
+  return 'All universities (platform-wide)';
+}
+
+/** The owner in one word, for the chip beside the title. */
+function scopeBadge(structure: AcademicStructure) {
+  const global = !structure.university && !structure.faculty && !structure.department;
+  return (
+    <Badge tone={global ? 'success' : 'neutral'}>{global ? 'Global' : 'Scoped'}</Badge>
+  );
+}
+
+/**
+ * The pinned colleges, never undefined.
+ *
+ * The API may predate the field — the dashboard and the API deploy
+ * independently — so every read goes through here rather than risking
+ * `undefined.length` on a page an administrator cannot then open at all.
+ */
+function overridesOf(structure: AcademicStructure): AcademicStructureFacultyOverride[] {
+  return structure.facultyOverrides ?? [];
+}
+
+/** "Faculty of Science · Cairo University", disambiguating same-named colleges. */
+function facultyLabel(entry: AcademicStructureFacultyOverride): string {
+  const university = entry.faculty.university?.name;
+  return university ? `${entry.faculty.name} · ${university}` : entry.faculty.name;
 }
 
 function kindBadge(kind: AcademicStructureKind) {
@@ -63,6 +100,7 @@ export function AcademicStructures() {
 
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AcademicStructure | null>(null);
+  const [assigning, setAssigning] = useState<AcademicStructure | null>(null);
 
   if (structures.isLoading) return <CardsSkeleton count={2} />;
   if (structures.error) {
@@ -80,10 +118,11 @@ export function AcademicStructures() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs text-muted">
-          Each structure is one ladder of years or levels. A university, college or department
-          without its own uses the one above it, and each of those can have only one. You may
-          keep several platform-wide structures side by side. The number of entries and their
-          names are yours to set — there is no fixed four.
+          Each structure is one ladder of years or levels. A structure is either global (every
+          university inherits it) or scoped to one university. Colleges follow their own
+          university&rsquo;s structure by default — unless you pin them to a different one, which
+          then wins. A pinned college may belong to any university. The number of entries and
+          their names are yours to set; there is no fixed four.
         </p>
         <Button size="sm" onClick={() => setCreating(true)}>
           Add structure
@@ -91,7 +130,7 @@ export function AcademicStructures() {
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-line p-6 text-center">
+        <div className="rounded-lg border border-dashed border-border p-6 text-center">
           <p className="text-sm font-medium">No academic structures yet</p>
           <p className="mt-1 text-xs text-muted">
             Add a platform-wide structure first. Every unit will inherit it.
@@ -109,21 +148,34 @@ export function AcademicStructures() {
             return (
               <li
                 key={structure.id}
-                className="rounded-lg border border-line bg-surface p-4"
+                className="rounded-lg border border-border bg-surface p-4"
                 data-testid={`structure-${structure.id}`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {scopeBadge(structure)}
                     {kindBadge(structure.kind)}
                     <span className="text-sm font-medium">{ownerLabel(structure)}</span>
                     {structure.isActive ? null : <Badge tone="warning">Inactive</Badge>}
                   </div>
-                  <Button size="sm" variant="secondary" onClick={() => setEditing(structure)}>
-                    Edit entries
-                  </Button>
+                  <div className="flex shrink-0 gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => setAssigning(structure)}>
+                      Assign colleges
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => setEditing(structure)}>
+                      Edit entries
+                    </Button>
+                  </div>
                 </div>
 
                 <p className="mt-2 text-xs text-muted">
+                  <span className="font-medium">Used by default by:</span>{' '}
+                  {structure.university || structure.faculty || structure.department
+                    ? `${ownerLabel(structure)} and anything under it without its own`
+                    : 'every university without its own structure'}
+                </p>
+
+                <p className="mt-1 text-xs text-muted">
                   {active.length} {structure.kind === 'LEVEL' ? 'level' : 'year'}
                   {active.length === 1 ? '' : 's'}
                   {retired.length > 0 ? ` · ${retired.length} retired` : ''}
@@ -133,7 +185,7 @@ export function AcademicStructures() {
                   {active.map((entry) => (
                     <span
                       key={entry.id}
-                      className="rounded-md border border-line px-2 py-0.5 text-xs tabular-nums"
+                      className="rounded-md border border-border px-2 py-0.5 text-xs tabular-nums"
                     >
                       {entry.order}. {entry.name}
                     </span>
@@ -141,12 +193,53 @@ export function AcademicStructures() {
                   {retired.map((entry) => (
                     <span
                       key={entry.id}
-                      className="rounded-md border border-dashed border-line px-2 py-0.5 text-xs text-subtle line-through"
+                      className="rounded-md border border-dashed border-border px-2 py-0.5 text-xs text-subtle line-through"
                       title="Retired — still referenced by existing students and courses"
                     >
                       {entry.order}. {entry.name}
                     </span>
                   ))}
+                </div>
+
+                {/* The second half of the answer: who has been pulled OFF their
+                    own university's ladder and onto this one. Shown on the card
+                    rather than behind the dialog, because an override is
+                    invisible from the owning university's side. */}
+                <div className="mt-3 border-t border-border pt-2">
+                  <p className="text-xs font-medium text-muted">
+                    Colleges pinned to this structure{' '}
+                    <span className="font-normal">(overrides their university&rsquo;s)</span>
+                  </p>
+                  {overridesOf(structure).length === 0 ? (
+                    <p className="mt-1 text-xs text-subtle">
+                      None — no college overrides its university for this structure.
+                    </p>
+                  ) : (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {overridesOf(structure).map((entry) => {
+                        // A pin reaching into another university is the case
+                        // most worth flagging, because it is the one an admin
+                        // would otherwise have to deduce.
+                        const foreign =
+                          structure.universityId != null &&
+                          entry.faculty.universityId !== structure.universityId;
+                        return (
+                          <span
+                            key={entry.facultyId}
+                            className="rounded-md border border-border bg-surface-alt px-2 py-0.5 text-xs"
+                            title={
+                              foreign
+                                ? 'This college belongs to a different university than the one that owns this structure'
+                                : undefined
+                            }
+                          >
+                            {facultyLabel(entry)}
+                            {foreign ? ' ·  other university' : ''}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </li>
             );
@@ -174,6 +267,17 @@ export function AcademicStructures() {
           }}
         />
       ) : null}
+
+      {assigning ? (
+        <AssignFacultiesDialog
+          structure={assigning}
+          onClose={() => setAssigning(null)}
+          onDone={() => {
+            setAssigning(null);
+            toast.success('Colleges updated');
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -181,9 +285,14 @@ export function AcademicStructures() {
 /**
  * Creating a structure.
  *
- * Scope is one choice, not three: picking a college clears the department, so
- * the request can never name two owners — which the server rejects and the
- * database has a CHECK constraint against.
+ * The level is a two-way choice — global, or one university — rather than the
+ * three cascading selects this dialog used to carry. Narrowing it is the point:
+ * a per-college or per-department ladder is now expressed by PINNING colleges
+ * to a structure (see `AssignFacultiesDialog`), which is strictly more capable
+ * because the pin can reach across universities and cover many colleges at
+ * once. The server still accepts a faculty- or department-owned structure, so
+ * any that already exist keep working and keep rendering in the list above;
+ * this dialog simply stops creating new ones.
  */
 function CreateStructureDialog({
   onClose,
@@ -196,26 +305,20 @@ function CreateStructureDialog({
   const toast = useToast();
 
   const [kind, setKind] = useState<AcademicStructureKind>('YEAR');
+  const [level, setLevel] = useState<'platform' | 'university'>('platform');
   const [universityId, setUniversityId] = useState('');
-  const [facultyId, setFacultyId] = useState('');
-  const [departmentId, setDepartmentId] = useState('');
 
   const universities = useUniversities();
-  const faculties = useFaculties(universityId || null);
-  const departments = useDepartments(facultyId || null);
 
   async function submit() {
+    if (level === 'university' && !universityId) {
+      toast.error('Choose a university, or make the structure global');
+      return;
+    }
     try {
       await create.mutateAsync({
         kind,
-        // Most specific wins, and only one is ever sent.
-        ...(departmentId
-          ? { departmentId }
-          : facultyId
-            ? { facultyId }
-            : universityId
-              ? { universityId }
-              : {}),
+        ...(level === 'university' ? { universityId } : {}),
       });
       onDone();
     } catch (error) {
@@ -257,49 +360,234 @@ function CreateStructureDialog({
         </Field>
 
         <Field
-          label="Applies to"
-          hint="Leave all three empty for a platform-wide structure that every unit inherits. Set one to give that unit its own."
+          label="Level"
+          required
+          hint="You can pin individual colleges to this structure afterwards, including colleges from other universities."
         >
           {() => (
             <div className="flex flex-col gap-2">
-              <Select
-                aria-label="University"
-                value={universityId}
-                placeholder="Platform-wide"
-                options={(universities.data ?? []).map((u) => ({ value: u.id, label: u.name }))}
-                onChange={(event) => {
-                  setUniversityId(event.target.value);
-                  setFacultyId('');
-                  setDepartmentId('');
-                }}
-              />
-              {universityId ? (
-                <Select
-                  aria-label="College"
-                  value={facultyId}
-                  placeholder="Whole university"
-                  options={(faculties.data ?? []).map((f) => ({ value: f.id, label: f.name }))}
-                  onChange={(event) => {
-                    setFacultyId(event.target.value);
-                    setDepartmentId('');
+              <label className="flex items-start gap-2 rounded-md border border-border p-2.5 text-xs">
+                <input
+                  type="radio"
+                  name="structure-level"
+                  className="mt-0.5"
+                  checked={level === 'platform'}
+                  onChange={() => {
+                    setLevel('platform');
+                    setUniversityId('');
                   }}
                 />
-              ) : null}
-              {facultyId ? (
+                <span>
+                  <span className="block text-sm font-medium">All universities</span>
+                  <span className="text-muted">
+                    Global. Every university without its own structure uses this one.
+                  </span>
+                </span>
+              </label>
+
+              <label className="flex items-start gap-2 rounded-md border border-border p-2.5 text-xs">
+                <input
+                  type="radio"
+                  name="structure-level"
+                  className="mt-0.5"
+                  checked={level === 'university'}
+                  onChange={() => setLevel('university')}
+                />
+                <span>
+                  <span className="block text-sm font-medium">One university</span>
+                  <span className="text-muted">
+                    Only that university and its colleges use it.
+                  </span>
+                </span>
+              </label>
+
+              {level === 'university' ? (
                 <Select
-                  aria-label="Department"
-                  value={departmentId}
-                  placeholder="Whole college"
-                  options={(departments.data ?? []).map((d) => ({
-                    value: d.id,
-                    label: d.name,
-                  }))}
-                  onChange={(event) => setDepartmentId(event.target.value)}
+                  aria-label="University"
+                  value={universityId}
+                  placeholder="Choose a university…"
+                  options={(universities.data ?? []).map((u) => ({ value: u.id, label: u.name }))}
+                  onChange={(event) => setUniversityId(event.target.value)}
                 />
               ) : null}
             </div>
           )}
         </Field>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Pinning colleges to a structure.
+ *
+ * The list is grouped by university and covers EVERY university, not just the
+ * one that owns the structure — pinning University A's college to University
+ * B's ladder is the reason this dialog exists, so restricting the list would
+ * quietly remove the feature.
+ *
+ * A college already pinned to another ladder is shown as such and can be taken
+ * from it in one click. The server moves the row rather than refusing, because
+ * a college can only have one ladder and refusing would just mean a detour via
+ * the other structure's dialog.
+ */
+function AssignFacultiesDialog({
+  structure,
+  onClose,
+  onDone,
+}: {
+  structure: AcademicStructure;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const tree = useCatalogTree();
+  const structures = useAcademicStructures();
+  const save = useSetStructureFaculties();
+  const toast = useToast();
+
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(overridesOf(structure).map((o) => o.facultyId)),
+  );
+  const [search, setSearch] = useState('');
+
+  /**
+   * Which OTHER structure currently holds each college, so the dialog can warn
+   * before a pin is taken away from somewhere else.
+   */
+  const heldElsewhere = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of structures.data ?? []) {
+      if (row.id === structure.id) continue;
+      for (const override of overridesOf(row)) {
+        map.set(override.facultyId, ownerLabel(row));
+      }
+    }
+    return map;
+  }, [structures.data, structure.id]);
+
+  const universities = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return (tree.data?.universities ?? [])
+      .map((university) => ({
+        id: university.id,
+        name: university.name,
+        faculties: (university.faculties ?? []).filter(
+          (faculty) =>
+            needle === '' ||
+            faculty.name.toLowerCase().includes(needle) ||
+            university.name.toLowerCase().includes(needle),
+        ),
+      }))
+      .filter((university) => university.faculties.length > 0);
+  }, [tree.data, search]);
+
+  function toggle(facultyId: string) {
+    setSelected((previous) => {
+      const next = new Set(previous);
+      if (next.has(facultyId)) next.delete(facultyId);
+      else next.add(facultyId);
+      return next;
+    });
+  }
+
+  async function submit() {
+    try {
+      await save.mutateAsync({ id: structure.id, facultyIds: [...selected] });
+      onDone();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not update the colleges');
+    }
+  }
+
+  const movedCount = [...selected].filter((id) => heldElsewhere.has(id)).length;
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Colleges — ${ownerLabel(structure)}`}
+      busy={save.isPending}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => void submit()} loading={save.isPending}>
+            Save
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <p className="text-xs text-muted">
+          A college ticked here uses this structure instead of the one it would inherit from its
+          own university, and so do its departments. Leave a college unticked and it keeps
+          following its university.
+        </p>
+
+        <Field label="Find a college">
+          {({ id }) => (
+            <TextInput
+              id={id}
+              value={search}
+              placeholder="Search colleges or universities…"
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          )}
+        </Field>
+
+        {tree.isLoading ? (
+          <CardsSkeleton count={2} />
+        ) : universities.length === 0 ? (
+          <p className="text-xs text-muted">No colleges match.</p>
+        ) : (
+          <div className="max-h-80 overflow-y-auto rounded-md border border-border">
+            {universities.map((university) => (
+              <div key={university.id} className="border-b border-border last:border-0">
+                <p className="bg-surface-alt px-3 py-1.5 text-xs font-semibold">
+                  {university.name}
+                  {structure.universityId === university.id ? (
+                    <span className="ml-1.5 font-normal text-muted">· owns this structure</span>
+                  ) : null}
+                </p>
+                <ul>
+                  {university.faculties.map((faculty) => {
+                    const held = heldElsewhere.get(faculty.id);
+                    const checked = selected.has(faculty.id);
+                    return (
+                      <li key={faculty.id}>
+                        <label className="flex cursor-pointer items-start gap-2 px-3 py-1.5 text-xs hover:bg-surface-alt">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={checked}
+                            onChange={() => toggle(faculty.id)}
+                          />
+                          <span className="min-w-0">
+                            <span className="block">{faculty.name}</span>
+                            {held ? (
+                              <span className="text-warning">
+                                Currently pinned to {held}
+                                {checked ? ' — will move here' : ''}
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <p className="text-xs text-muted">
+          {selected.size} college{selected.size === 1 ? '' : 's'} pinned
+          {movedCount > 0
+            ? ` · ${movedCount} will be moved off another structure`
+            : ''}
+        </p>
       </div>
     </Modal>
   );

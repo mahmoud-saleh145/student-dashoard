@@ -12,3 +12,6 @@ test-results/
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
+
+# scratch archives used to mirror the repo into a sandbox — never project content
+_mirror-*.tgz

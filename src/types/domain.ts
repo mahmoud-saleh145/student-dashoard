@@ -206,6 +206,28 @@ export interface AcademicStructure {
     nameAr: string;
     isActive: boolean;
   }[];
+  /**
+   * Colleges explicitly pinned to this ladder, which then use it instead of
+   * the one they would inherit from their own university.
+   *
+   * Each entry carries its college's university on purpose: a pin may reach
+   * across universities, so without it two identically-named colleges would be
+   * indistinguishable in the list.
+   *
+   * OPTIONAL deliberately. The dashboard deploys to Vercel and the API to
+   * Render, independently — so this build can be live against an API that
+   * predates the field. Typed as possibly-absent forces every read through a
+   * fallback instead of throwing on `undefined.length`.
+   */
+  facultyOverrides?: AcademicStructureFacultyOverride[];
+}
+
+export interface AcademicStructureFacultyOverride {
+  facultyId: string;
+  faculty: NamedRef & {
+    universityId: string;
+    university: NamedRef | null;
+  };
 }
 
 export interface Subject extends NamedRef {

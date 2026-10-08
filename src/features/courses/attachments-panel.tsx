@@ -147,7 +147,7 @@ export function AttachmentsPanel({
           No documents on this {noun} yet.
         </p>
       ) : (
-        <ul className="divide-y divide-line rounded-md border border-line">
+        <ul className="divide-y divide-line rounded-md border border-border">
           {rows.map((row) => (
             <li key={row.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
               <div className="min-w-0 flex-1">
@@ -190,7 +190,7 @@ export function AttachmentsPanel({
         </ul>
       )}
 
-      <div className="flex flex-col gap-3 rounded-md border border-dashed border-line p-3">
+      <div className="flex flex-col gap-3 rounded-md border border-dashed border-border p-3">
         <Field label="Title" hint="Optional — the file name is used if you leave it empty.">
           {({ id }) => (
             <TextInput
