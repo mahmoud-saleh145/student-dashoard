@@ -199,7 +199,7 @@ export interface AcademicStructure {
   departmentId: string | null;
   university: NamedRef | null;
   faculty: NamedRef | null;
-  department: NamedRef | null;
+  department: (NamedRef & { studyType?: 'GENERAL' | 'PROGRAMS' }) | null;
   entries: {
     id: string;
     order: number;
@@ -258,7 +258,7 @@ export interface AdminUser {
 export interface StudentRow extends AdminUser {
   university: NamedRef | null;
   faculty: NamedRef | null;
-  department: NamedRef | null;
+  department: (NamedRef & { studyType?: 'GENERAL' | 'PROGRAMS' }) | null;
   academicYear: (NamedRef & { order: number }) | null;
 }
 
@@ -388,7 +388,7 @@ export interface CourseStudentRow {
     status: AccountStatus;
     university: NamedRef | null;
     faculty: NamedRef | null;
-    department: NamedRef | null;
+    department: (NamedRef & { studyType?: 'GENERAL' | 'PROGRAMS' }) | null;
     academicYear: (NamedRef & { order: number }) | null;
   };
   course: { id: string; title: string };
