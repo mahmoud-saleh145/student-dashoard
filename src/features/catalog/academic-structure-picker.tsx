@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import { Checkbox, Field, Select } from '@/components/ui/field';
 import { useDepartments, useFaculties, useUniversities } from '@/features/catalog/hooks';
 
@@ -38,6 +40,12 @@ export function AcademicStructurePicker({
   const universities = useUniversities();
   const faculties = useFaculties(value.universityId || null);
   const departments = useDepartments(value.facultyId || null);
+
+  const [selectedStudyType, setSelectedStudyType] = useState<'GENERAL' | 'PROGRAMS' | ''>('');
+  const inferredStudyType = (departments.data ?? []).find((d) =>
+    value.departmentIds.includes(d.id),
+  )?.studyType;
+  const studyType = inferredStudyType ?? selectedStudyType;
 
   const university = (universities.data ?? []).find((u) => u.id === value.universityId);
   const faculty = (faculties.data ?? []).find((f) => f.id === value.facultyId);
@@ -106,6 +114,26 @@ export function AcademicStructurePicker({
       </div>
 
       {value.facultyId ? (
+        <Field label="Study type">
+          {({ id }) => (
+            <Select
+              id={id}
+              value={studyType}
+              disabled={disabled}
+              placeholder="Choose a study type"
+              options={[
+                { value: 'GENERAL', label: 'General' },
+                { value: 'PROGRAMS', label: 'Programs' },
+              ]}
+              onChange={(event) => {
+                setSelectedStudyType(event.target.value as 'GENERAL' | 'PROGRAMS');
+                onChange({ ...value, departmentIds: [] });
+              }}
+            />
+          )}
+        </Field>
+      ) : null}
+      {value.facultyId && studyType ? (
         <Field
           label="Departments"
           hint="A course can be offered to more than one department of the same college."
@@ -117,15 +145,19 @@ export function AcademicStructurePicker({
               <p className="text-sm text-muted">This college has no departments yet.</p>
             ) : (
               <div className="flex flex-wrap gap-x-6 gap-y-2">
-                {(departments.data ?? []).map((department) => (
-                  <Checkbox
-                    key={department.id}
-                    label={department.name}
-                    checked={value.departmentIds.includes(department.id)}
-                    disabled={disabled}
-                    onChange={(event) => toggleDepartment(department.id, event.target.checked)}
-                  />
-                ))}
+                {(departments.data ?? [])
+                  .filter((department) => (department.studyType ?? 'GENERAL') === studyType)
+                  .map((department) => (
+                    <Checkbox
+                      key={department.id}
+                      label={department.name}
+                      checked={value.departmentIds.includes(department.id)}
+                      disabled={disabled}
+                      onChange={(event) =>
+                        toggleDepartment(department.id, event.target.checked)
+                      }
+                    />
+                  ))}
               </div>
             )
           }

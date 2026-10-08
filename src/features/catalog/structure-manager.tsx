@@ -60,6 +60,7 @@ export function StructureManager() {
 
   const [name, setName] = useState('');
   const [nameAr, setNameAr] = useState('');
+  const [studyType, setStudyType] = useState<'GENERAL' | 'PROGRAMS'>('GENERAL');
 
   // Read only while a confirmation is open, and never cached: a stale count
   // is worse than a brief spinner on a dialog that is about to change things.
@@ -104,7 +105,11 @@ export function StructureManager() {
         await createFaculty.mutateAsync({ universityId: dialog.parentId, ...payload });
         toast.success('College added');
       } else {
-        await createDepartment.mutateAsync({ facultyId: dialog.parentId, ...payload });
+        await createDepartment.mutateAsync({
+          facultyId: dialog.parentId,
+          studyType,
+          ...payload,
+        });
         toast.success('Department added');
       }
 
@@ -167,8 +172,7 @@ export function StructureManager() {
             // promising something harsher was the part that was wrong.
             label: 'Deactivate',
             danger: true,
-            onSelect: () =>
-              setConfirming({ entity, id: row.id, label: row.name }),
+            onSelect: () => setConfirming({ entity, id: row.id, label: row.name }),
           }
         : {
             label: 'Reactivate',
@@ -216,7 +220,10 @@ export function StructureManager() {
             title="No universities yet"
             description="Add a university, then its colleges and departments. Students choose from this structure when they register."
             action={
-              <Button size="sm" onClick={() => openCreate({ mode: 'create', kind: 'university' })}>
+              <Button
+                size="sm"
+                onClick={() => openCreate({ mode: 'create', kind: 'university' })}
+              >
                 Add university
               </Button>
             }
@@ -294,7 +301,10 @@ export function StructureManager() {
                               className="flex items-center justify-between gap-2 px-3 py-1.5"
                             >
                               <span className="flex min-w-0 items-center gap-2 text-sm text-foreground">
-                                <span className="truncate">{department.name}</span>
+                                <span className="truncate">
+                                  {department.name} ·{' '}
+                                  {department.studyType === 'PROGRAMS' ? 'Programs' : 'General'}
+                                </span>
                                 {!department.isActive ? (
                                   <Badge tone="neutral">Inactive</Badge>
                                 ) : null}
@@ -338,6 +348,22 @@ export function StructureManager() {
         }
       >
         <div className="flex flex-col gap-4">
+          {dialog?.kind === 'department' && dialog.mode === 'create' ? (
+            <Field label="Study type">
+              {({ id }) => (
+                <select
+                  id={id}
+                  value={studyType}
+                  onChange={(event) =>
+                    setStudyType(event.target.value as 'GENERAL' | 'PROGRAMS')
+                  }
+                >
+                  <option value="GENERAL">General</option>
+                  <option value="PROGRAMS">Programs</option>
+                </select>
+              )}
+            </Field>
+          ) : null}
           <Field label="English name" required>
             {({ id }) => (
               <TextInput
@@ -399,7 +425,11 @@ function dialogTitle(dialog: DialogState | null): string {
 
   if (dialog.mode === 'edit') {
     const noun =
-      dialog.kind === 'university' ? 'university' : dialog.kind === 'faculty' ? 'college' : 'department';
+      dialog.kind === 'university'
+        ? 'university'
+        : dialog.kind === 'faculty'
+          ? 'college'
+          : 'department';
     return `Rename ${noun}`;
   }
 

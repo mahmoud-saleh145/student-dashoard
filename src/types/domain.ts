@@ -159,6 +159,7 @@ export interface Faculty extends NamedRef {
 }
 
 export interface Department extends NamedRef {
+  studyType?: 'GENERAL' | 'PROGRAMS';
   facultyId: string;
   isActive: boolean;
   sortOrder: number;
