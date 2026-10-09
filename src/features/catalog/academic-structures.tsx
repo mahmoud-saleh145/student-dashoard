@@ -15,6 +15,8 @@ import {
   useReplaceStructureEntries,
   useSetStructureFaculties,
   useUniversities,
+  useFaculties,
+  useDepartments,
   useUpdateAcademicStructure,
 } from '@/features/catalog/hooks';
 import type {
@@ -119,9 +121,9 @@ export function AcademicStructures() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs text-muted">
           Each structure is one ladder of years or levels. A structure is either global (every
-          university inherits it) or scoped to one university. Colleges follow their own
+          university inherits it) or scoped to one university or department. Colleges follow their own
           university&rsquo;s structure by default — unless you pin them to a different one, which
-          then wins. A pinned college may belong to any university. The number of entries and
+          wins unless a department defines its own ladder. A pinned college may belong to any university. The number of entries and
           their names are yours to set; there is no fixed four.
         </p>
         <Button size="sm" onClick={() => setCreating(true)}>
@@ -282,18 +284,7 @@ export function AcademicStructures() {
   );
 }
 
-/**
- * Creating a structure.
- *
- * The level is a two-way choice — global, or one university — rather than the
- * three cascading selects this dialog used to carry. Narrowing it is the point:
- * a per-college or per-department ladder is now expressed by PINNING colleges
- * to a structure (see `AssignFacultiesDialog`), which is strictly more capable
- * because the pin can reach across universities and cover many colleges at
- * once. The server still accepts a faculty- or department-owned structure, so
- * any that already exist keep working and keep rendering in the list above;
- * this dialog simply stops creating new ones.
- */
+/** Create a global, university or department-specific year/level ladder. */
 function CreateStructureDialog({
   onClose,
   onDone,
@@ -305,8 +296,12 @@ function CreateStructureDialog({
   const toast = useToast();
 
   const [kind, setKind] = useState<AcademicStructureKind>('YEAR');
-  const [level, setLevel] = useState<'platform' | 'university'>('platform');
+  const [level, setLevel] = useState<'platform' | 'university' | 'department'>('platform');
   const [universityId, setUniversityId] = useState('');
+  const [facultyId, setFacultyId] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
+  const faculties = useFaculties(universityId || null);
+  const departments = useDepartments(facultyId || null);
 
   const universities = useUniversities();
 
@@ -315,10 +310,12 @@ function CreateStructureDialog({
       toast.error('Choose a university, or make the structure global');
       return;
     }
+    if (level === 'department' && !departmentId) { toast.error('Choose a department or program'); return; }
     try {
       await create.mutateAsync({
         kind,
         ...(level === 'university' ? { universityId } : {}),
+        ...(level === 'department' ? { departmentId } : {}),
       });
       onDone();
     } catch (error) {
@@ -401,6 +398,15 @@ function CreateStructureDialog({
                 </span>
               </label>
 
+              <label className="flex items-start gap-2 rounded-md border border-border p-2.5 text-xs">
+                <input type="radio" name="structure-level" checked={level === 'department'} onChange={() => setLevel('department')} />
+                <span className="text-sm font-medium">One department or program</span>
+              </label>
+              {level === 'department' ? <>
+                <Select aria-label="Department university" value={universityId} placeholder="Choose a university" options={(universities.data ?? []).map((u) => ({ value: u.id, label: u.name }))} onChange={(event) => { setUniversityId(event.target.value); setFacultyId(''); setDepartmentId(''); }} />
+                <Select aria-label="Department faculty" value={facultyId} disabled={!universityId} placeholder="Choose a faculty" options={(faculties.data ?? []).map((f) => ({ value: f.id, label: f.name }))} onChange={(event) => { setFacultyId(event.target.value); setDepartmentId(''); }} />
+                <Select aria-label="Department or program" value={departmentId} disabled={!facultyId} placeholder="Choose a department or program" options={(departments.data ?? []).map((d) => ({ value: d.id, label: `${d.studyType === 'PROGRAMS' ? 'Programs' : 'General'} / ${d.name}` }))} onChange={(event) => { setDepartmentId(event.target.value); setKind(departments.data?.find((d) => d.id === event.target.value)?.studyType === 'PROGRAMS' ? 'LEVEL' : 'YEAR'); }} />
+              </> : null}
               {level === 'university' ? (
                 <Select
                   aria-label="University"

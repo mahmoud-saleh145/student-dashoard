@@ -185,8 +185,9 @@ export function StudentDrawer({
                   { label: 'Gender', value: data.gender.toLowerCase() },
                   { label: 'University', value: data.university?.name ?? '—' },
                   { label: 'College', value: data.faculty?.name ?? '—' },
-                  { label: 'Department', value: data.department?.name ?? '—' },
-                  { label: 'Academic year', value: data.academicYear?.name ?? '—' },
+                  { label: 'Study type', value: data.department?.studyType === 'PROGRAMS' ? 'Programs' : data.department ? 'General' : '—' },
+                  { label: data.department?.studyType === 'PROGRAMS' ? 'Program' : 'Department', value: data.department?.name ?? '—' },
+                  { label: data.department?.studyType === 'PROGRAMS' ? 'Level' : 'Academic year', value: data.academicYear?.name ?? '—' },
                   { label: 'Registered', value: formatDateTime(data.createdAt) },
                   { label: 'Last login', value: formatDateTime(data.lastLoginAt) },
                 ]}

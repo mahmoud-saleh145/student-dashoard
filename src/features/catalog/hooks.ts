@@ -83,17 +83,15 @@ export interface AcademicYearScope {
  */
 export function useAcademicYears(scope?: AcademicYearScope) {
   // Most specific wins, which is the same precedence the API resolves by.
-  const query =
-    scope?.departmentId
-      ? { departmentId: scope.departmentId }
-      : scope?.facultyId
-        ? { facultyId: scope.facultyId }
-        : scope?.universityId
-          ? { universityId: scope.universityId }
-          : {};
+  const query = scope?.departmentId
+    ? { departmentId: scope.departmentId }
+    : scope?.facultyId
+      ? { facultyId: scope.facultyId }
+      : scope?.universityId
+        ? { universityId: scope.universityId }
+        : {};
 
-  const cacheScope =
-    query.departmentId ?? query.facultyId ?? query.universityId ?? 'platform';
+  const cacheScope = query.departmentId ?? query.facultyId ?? query.universityId ?? 'platform';
 
   return useQuery({
     queryKey: queryKeys.catalog.academicYears(cacheScope),
@@ -130,9 +128,7 @@ export function useCatalogTree() {
 }
 
 /** Every catalogue write invalidates the whole tree — it is small and cheap. */
-function useCatalogMutation<TInput>(
-  perform: (input: TInput) => Promise<unknown>,
-) {
+function useCatalogMutation<TInput>(perform: (input: TInput) => Promise<unknown>) {
   const queryClient = useQueryClient();
 
   return useMutation({
@@ -169,9 +165,12 @@ export function useCreateFaculty() {
 }
 
 export function useCreateDepartment() {
-  return useCatalogMutation<{ facultyId: string; name: string; nameAr: string }>((input) =>
-    api.post('catalog/departments', input),
-  );
+  return useCatalogMutation<{
+    facultyId: string;
+    studyType: 'GENERAL' | 'PROGRAMS';
+    name: string;
+    nameAr: string;
+  }>((input) => api.post('catalog/departments', input));
 }
 
 export function useCreateAcademicYear() {
