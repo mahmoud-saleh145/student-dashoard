@@ -32,6 +32,12 @@ export const queryKeys = {
     academicYears: (scope: string = 'platform') =>
       ['catalog', 'academic-years', scope] as const,
     academicStructures: ['catalog', 'academic-structures'] as const,
+    /**
+     * University defaults and college overrides with inheritance spelled out.
+     * Under the same `catalog` prefix so a university edit invalidates it too —
+     * a college's `inherited` flag can change from a university edit alone.
+     */
+    academicSystems: ['catalog', 'academic-systems'] as const,
   },
 
   subjects: {
@@ -56,6 +62,8 @@ export const queryKeys = {
     // video rather than the lesson: replacing a lecture's video reuses the
     // same Video row, and a stale key would show the previous run's state.
     status: (videoId: string) => ['videos', 'status', videoId] as const,
+  /** Gumlet provisioning state, mirrored from the staff status endpoint. */
+  gumlet: (videoId: string) => ['videos', 'gumlet', videoId] as const,
   },
 
   lessons: {
@@ -86,8 +94,7 @@ export const queryKeys = {
   codes: {
     all: ['codes'] as const,
     list: (params: unknown) => ['codes', 'list', params] as const,
-    redemptions: (id: string, params: unknown) =>
-      ['codes', 'redemptions', id, params] as const,
+    redemptions: (id: string, params: unknown) => ['codes', 'redemptions', id, params] as const,
     batches: (params: unknown) => ['codes', 'batches', params] as const,
     batchCodes: (id: string) => ['codes', 'batch-codes', id] as const,
   },

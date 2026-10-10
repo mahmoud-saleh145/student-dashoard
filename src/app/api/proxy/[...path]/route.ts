@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { backendRequest } from '@/lib/backend';
 import { serverConfig } from '@/lib/config';
 import { ApiError } from '@/lib/errors';
-import { getAccessToken, refreshAccessToken } from '@/lib/session';
+import { attemptRefresh, getAccessToken } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
@@ -133,7 +133,8 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
     // forbidden action, a validation failure — is the real answer and is
     // passed straight through.
     if (error instanceof ApiError && error.status === 401) {
-      token = await refreshAccessToken();
+      const attempt = await attemptRefresh();
+      token = attempt.token;
 
       if (token) {
         try {
@@ -145,6 +146,20 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Next
         } catch (retryError) {
           return errorResponse(retryError);
         }
+      }
+
+      // Only a definitive refusal ends the session. A refresh that failed
+      // because the API was unreachable is reported as retryable, because
+      // answering 401 here is what made an infrastructure blip look to the
+      // browser like an expired session — and `endSession()` on the client
+      // turns that straight into a logout. The cookies are still intact and
+      // the next request tries again.
+      if (!attempt.sessionEnded) {
+        return problem(
+          503,
+          'SESSION_REFRESH_UNAVAILABLE',
+          'The session could not be renewed right now. Please try again.',
+        );
       }
 
       return problem(401, 'SESSION_EXPIRED', 'Your session has expired. Please sign in again.');

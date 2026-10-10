@@ -1,10 +1,12 @@
 import {
   ACCOUNTS,
+  breakRefreshTransport,
   disableAccount,
   expect,
   forbidPath,
   rejectRefresh,
   resetStub,
+  restoreRefreshTransport,
   staleAccessToken,
   revokeSession,
   stubRequests,
@@ -135,6 +137,61 @@ test.describe('expired access token', () => {
 
     const requests = await stubRequests(page);
     expect(requests.filter((r) => r === 'POST /auth/refresh').length).toBeLessThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A refresh that fails for a reason that is not the token
+// ---------------------------------------------------------------------------
+
+test.describe('refresh failing for an unrelated reason', () => {
+  test('does NOT sign the administrator out when the API is briefly unreachable', async ({
+    page,
+    signIn,
+  }) => {
+    // The regression behind the reported "Session Expired" loop.
+    //
+    // A refresh that fails in transit — 503, a timeout, a dropped connection —
+    // says nothing about whether the token is valid. The proxy used to answer
+    // 401 SESSION_EXPIRED regardless of why the refresh failed, and 401 ends
+    // the session client-side: cookies cleared, navigate to login. One
+    // unreachable moment therefore logged a working administrator out, even
+    // though their 30-day refresh token was never touched.
+    await signIn('admin');
+    await expect(page).toHaveURL(/\/$/);
+
+    await breakRefreshTransport(page);
+
+    // Navigate somewhere that forces a proxied data call with a stale token.
+    await page.goto('/students').catch(() => undefined);
+
+    // The transport can still be failing, but the operator must still be on the
+    // dashboard — not on the login screen with an expired-session notice.
+    await expect(page).not.toHaveURL(/\/login/);
+
+    const cookies = await page.context().cookies();
+    const refreshCookie = cookies.find((c) => c.name === 'edu_rt');
+    expect(
+      refreshCookie,
+      'a transient refresh failure must not discard a valid refresh token',
+    ).toBeTruthy();
+  });
+
+  test('recovers on the next request once the API answers again', async ({ page, signIn }) => {
+    await signIn('admin');
+    await expect(page).toHaveURL(/\/$/);
+
+    await breakRefreshTransport(page);
+    await page.goto('/students').catch(() => undefined);
+    await expect(page).not.toHaveURL(/\/login/);
+
+    await restoreRefreshTransport(page);
+
+    // With the API reachable again the same session keeps working — no
+    // re-authentication, because nothing was ever wrong with the token.
+    await page.goto('/students');
+    await expect(page.getByRole('heading', { name: 'Students', level: 1 })).toBeVisible();
+    await expect(page).toHaveURL(/\/students/);
   });
 });
 

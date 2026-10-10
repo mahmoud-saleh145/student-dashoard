@@ -167,7 +167,85 @@ export interface Department extends NamedRef {
 }
 
 /** Whether a ladder is expressed as Years ("Third Year") or Levels ("Level 3"). */
+/**
+ * The academic progression system: which vocabulary a college's ladder uses.
+ *
+ * YEAR is نظام الفرق ("First Year".."Fourth Year"); LEVEL is نظام الليفلز
+ * ("Level 000".."Level 400"). It is a college's configuration and nothing else —
+ * in particular it is NOT a government/private classification, and no code
+ * anywhere derives one from the other.
+ */
 export type AcademicStructureKind = 'YEAR' | 'LEVEL';
+
+/** Where a college's effective system came from. */
+export type AcademicSystemSource = 'COLLEGE_OVERRIDE' | 'UNIVERSITY_DEFAULT';
+
+/**
+ * A college's resolved academic system.
+ *
+ * `source` is load-bearing rather than informational: the admin screen renders
+ * "Inherited" for `UNIVERSITY_DEFAULT` and "Override" for `COLLEGE_OVERRIDE`, so
+ * an administrator can see which colleges will follow a future change of their
+ * university's default and which will not.
+ */
+export interface ResolvedAcademicSystem {
+  system: AcademicStructureKind;
+  source: AcademicSystemSource;
+  universityId: string | null;
+  facultyId: string | null;
+  /** The university's default, so the UI can show what was inherited from. */
+  universityDefault: AcademicStructureKind | null;
+  /** The college's stored override, or null when it inherits. */
+  facultyOverride: AcademicStructureKind | null;
+}
+
+/** One row of `GET catalog/academic-systems`. */
+export interface AcademicSystemOverviewUniversity {
+  id: string;
+  name: string;
+  nameAr: string;
+  isActive: boolean;
+  defaultAcademicSystem: AcademicStructureKind;
+  collegeCount: number;
+}
+
+export interface AcademicSystemOverviewFaculty {
+  id: string;
+  name: string;
+  nameAr: string;
+  isActive: boolean;
+  universityId: string;
+  universityName: string;
+  /** The stored override. Null means "inherits". */
+  academicSystemOverride: AcademicStructureKind | null;
+  /** What the college actually uses, override or inherited. */
+  effectiveAcademicSystem: AcademicStructureKind;
+  /** True when `effectiveAcademicSystem` came from the university. */
+  inherited: boolean;
+  /**
+   * The vocabulary the college's governing ladder is actually written in, or null
+   * when it has no ladder yet.
+   *
+   * Separate from `effectiveAcademicSystem` on purpose: changing a university's
+   * default moves the configuration but NOT the ladder. A college can therefore
+   * be configured for levels while its entries are still named "First Year",
+   * and the screen has to be able to say so instead of implying otherwise.
+   */
+  ladderKind: AcademicStructureKind | null;
+  /** True when the ladder's vocabulary disagrees with the configuration. */
+  ladderMismatch: boolean;
+  /**
+   * True when a stored override now equals the university default, so it records
+   * no decision but would survive the next change of that default. Surfaced as a
+   * "clear this" hint rather than an error, because the row is legitimate.
+   */
+  redundantOverride: boolean;
+}
+
+export interface AcademicSystemOverview {
+  universities: AcademicSystemOverviewUniversity[];
+  faculties: AcademicSystemOverviewFaculty[];
+}
 
 export interface AcademicYear extends NamedRef {
   order: number;

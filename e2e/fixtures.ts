@@ -80,6 +80,23 @@ export async function disableAccount(page: Page): Promise<void> {
   await page.request.get(`${STUB_API}/__test__/disable-account`);
 }
 
+/**
+ * The access token is stale and the refresh exchange answers 503 — the API is
+ * briefly unreachable, not the session invalid.
+ *
+ * This is the exact shape of the reported bug: a transient failure on the way
+ * to the backend used to be reported as `SESSION_EXPIRED`, which ended a
+ * session that was still perfectly valid.
+ */
+export async function breakRefreshTransport(page: Page): Promise<void> {
+  await page.request.get(`${STUB_API}/__test__/refresh-unavailable`);
+}
+
+/** Undoes `breakRefreshTransport`. */
+export async function restoreRefreshTransport(page: Page): Promise<void> {
+  await page.request.get(`${STUB_API}/__test__/refresh-available`);
+}
+
 /** Every path the stub has been asked for, in order. */
 export async function stubRequests(page: Page): Promise<string[]> {
   const response = await page.request.get(`${STUB_API}/__test__/requests`);

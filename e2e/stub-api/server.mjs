@@ -117,6 +117,15 @@ const control = {
   /** When true, `/auth/refresh` refuses. Pairs with `sessionRevoked`. */
   rejectRefresh: false,
   /**
+   * When true, `/auth/refresh` answers 503 instead of 401.
+   *
+   * The distinction that caused the repeated "Session Expired" reports: a
+   * refresh that fails because the API is briefly unreachable says nothing at
+   * all about whether the token is valid. The old code answered 401 either way,
+   * and 401 ends the session client-side.
+   */
+  refreshUnavailable: false,
+  /**
    * Models an access token that has simply lapsed: every authenticated call
    * answers 401 until a refresh succeeds, at which point it clears itself.
    *
@@ -835,6 +844,7 @@ const server = createServer(async (req, res) => {
       control.expireAccessTokenOnce = false;
       control.sessionRevoked = false;
       control.rejectRefresh = false;
+      control.refreshUnavailable = false;
       control.accessTokenStale = false;
       control.accountDisabled = false;
       control.forbid.clear();
@@ -863,6 +873,16 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/__test__/reject-refresh') {
       control.rejectRefresh = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/refresh-unavailable') {
+      control.refreshUnavailable = true;
+      control.accessTokenStale = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/refresh-available') {
+      control.refreshUnavailable = false;
+      control.accessTokenStale = false;
       return ok(res, { armed: true });
     }
     if (path === '/__test__/disable-account') {
@@ -950,6 +970,10 @@ const server = createServer(async (req, res) => {
 
   if (path === '/auth/refresh' && method === 'POST') {
     const body = await readBody(req);
+    if (control.refreshUnavailable) {
+      // A transport-level failure, not a verdict on the token.
+      return fail(res, 503, 'SERVER_ERROR', 'The API is temporarily unavailable.');
+    }
     if (control.rejectRefresh) {
       return fail(res, 401, 'SESSION_EXPIRED', 'Refresh token rejected.');
     }
@@ -1865,7 +1889,21 @@ const server = createServer(async (req, res) => {
   if (path === '/audit/logins') return page(res, []);
   if (path === '/catalog/universities') return ok(res, []);
   if (path === '/catalog/academic-years') return ok(res, []);
-  if (path === '/catalog/tree') return ok(res, { universities: [] });
+  /*
+   * The academic-system configuration. Returned as a well-formed but empty
+   * shape rather than left to 404: this is the screen the Academic Structure
+   * panel reads, and a 404 here renders an error state on a page that is
+   * otherwise fine, which turns every catalog test into a false failure.
+   *
+   * `academic-systems` is deliberately NOT stubbed with real rows. A test that
+   * needs universities, colleges or overrides installs its own `page.route`
+   * handler, which takes precedence over this one — that is how the inheritance
+   * and override behaviour is asserted without pinning the stub to one shape.
+   */
+  if (path === '/catalog/academic-systems') return ok(res, { universities: [], faculties: [] });
+  if (path === '/catalog/academic-structures') return ok(res, []);
+  if (path === '/catalog/academic-selection') return ok(res, { academicSystem: null, academicYears: [] });
+  if (path === '/catalog/tree') return ok(res, { universities: [], academicYears: [] });
   if (path === '/subjects') return ok(res, []);
 
   if (path === '/admin/settings') {

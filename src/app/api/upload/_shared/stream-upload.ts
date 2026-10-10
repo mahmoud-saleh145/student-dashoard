@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 import { buildUrl } from '@/lib/backend';
 import { serverConfig } from '@/lib/config';
-import { getAccessToken, refreshAccessToken } from '@/lib/session';
+import { attemptRefresh, getAccessToken } from '@/lib/session';
 
 /**
  * The binary door, shared by every upload route beside the JSON proxy.
@@ -93,8 +93,19 @@ export async function handleStreamUpload(
   let response = await forward(spec.backendPath, first, token, query, contentType, contentLength);
 
   if (response.status === 401) {
-    token = await refreshAccessToken();
+    // Same distinction as the proxy: a refresh that failed for an unrelated
+    // reason must not be reported as an expired session.
+    const attempt = await attemptRefresh();
+    token = attempt.token;
+
     if (!token) {
+      if (!attempt.sessionEnded) {
+        return problem(
+          503,
+          'SESSION_REFRESH_UNAVAILABLE',
+          'The session could not be renewed right now. Please try again.',
+        );
+      }
       return problem(401, 'SESSION_EXPIRED', 'Your session has expired. Please sign in again.');
     }
     response = await forward(spec.backendPath, second, token, query, contentType, contentLength);

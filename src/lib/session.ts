@@ -283,9 +283,9 @@ export async function requireSessionUser(): Promise<SessionUser | null> {
 // matters — two concurrent requests from one browser share one rotation, so a
 // single-use token is never presented twice and the family is never revoked as
 // theft — while making it impossible for two different sessions to share one.
-const refreshInFlight = new Map<string, Promise<string | null>>();
+const refreshInFlight = new Map<string, Promise<RefreshAttempt>>();
 
-function rotate(refreshToken: string): Promise<string | null> {
+function rotate(refreshToken: string): Promise<RefreshAttempt> {
   const existing = refreshInFlight.get(refreshToken);
   if (existing) return existing;
 
@@ -305,19 +305,39 @@ export async function getAccessToken(): Promise<string | null> {
   const refresh = jar.get(COOKIE.refresh)?.value;
   if (!refresh) return null;
 
-  return rotate(refresh);
+  return (await rotate(refresh)).token;
 }
 
 /** Forces a rotation — called by the proxy when the backend answers 401. */
 export async function refreshAccessToken(): Promise<string | null> {
+  return (await attemptRefresh()).token;
+}
+
+/**
+ * A refresh attempt, and whether it failed in a way that ends the session.
+ *
+ * The distinction matters because it decides what the browser is told. Answering
+ * `401 SESSION_EXPIRED` triggers `endSession()` on the client, which clears the
+ * cookies and navigates to the login screen. A timeout or a 502 has not earned
+ * that: the session is still valid, so it is reported as a transient failure and
+ * the administrator stays where they are.
+ */
+export type RefreshAttempt = {
+  token: string | null;
+  /** True only when the token itself is unusable and login is genuinely required. */
+  sessionEnded: boolean;
+};
+
+export async function attemptRefresh(): Promise<RefreshAttempt> {
   const jar = await cookies();
   const refresh = jar.get(COOKIE.refresh)?.value;
-  if (!refresh) return null;
+  // No refresh cookie at all is a session that is genuinely over.
+  if (!refresh) return { token: null, sessionEnded: true };
 
   return rotate(refresh);
 }
 
-async function refreshSession(refreshToken: string): Promise<string | null> {
+async function refreshSession(refreshToken: string): Promise<RefreshAttempt> {
   try {
     const { data } = await backendRequest<{
       accessToken: string;
@@ -332,14 +352,44 @@ async function refreshSession(refreshToken: string): Promise<string | null> {
     trySetCookie(jar, COOKIE.access, data.accessToken, cookieOptions(ACCESS_MAX_AGE));
     trySetCookie(jar, COOKIE.refresh, data.refreshToken, cookieOptions(REFRESH_MAX_AGE));
 
-    return data.accessToken;
-  } catch {
-    const jar = await cookies();
-    tryDeleteCookie(jar, COOKIE.access);
-    tryDeleteCookie(jar, COOKIE.refresh);
-    tryDeleteCookie(jar, COOKIE.profile);
-    return null;
+    return { token: data.accessToken, sessionEnded: false };
+  } catch (error) {
+    // Only a definitive rejection may end the session.
+    //
+    // This used to be a bare `catch` that deleted the cookies on any failure at
+    // all. The backend refuses nothing about a network blip, a 502 from an
+    // intermediary, a timeout, or a 429 — `backendRequest` reports all of those
+    // as ordinary errors — so a single unreachable moment while an administrator
+    // was working deleted a refresh token that was still perfectly valid and
+    // produced the "Session Expired" screen. That is the reported symptom, and
+    // it was self-inflicted: the backend had never rejected anything.
+    //
+    // A refresh that fails for a reason unrelated to the token leaves the
+    // session intact. The next request tries again; the caller surfaces a
+    // transient error instead of a logout.
+    if (isDefinitiveRefreshRejection(error)) {
+      const jar = await cookies();
+      tryDeleteCookie(jar, COOKIE.access);
+      tryDeleteCookie(jar, COOKIE.refresh);
+      tryDeleteCookie(jar, COOKIE.profile);
+      return { token: null, sessionEnded: true };
+    }
+
+    return { token: null, sessionEnded: false };
   }
+}
+
+/**
+ * Whether a failed refresh is the backend saying "this token is no longer
+ * usable", as opposed to something going wrong on the way there.
+ *
+ * Mirrors `isDefinitiveRefreshRejection` in the student app. Both applications
+ * make the same distinction because both were getting it wrong in opposite
+ * directions: this one logged people out on timeouts, that one logged them out
+ * on rate limits.
+ */
+function isDefinitiveRefreshRejection(error: unknown): boolean {
+  return error instanceof ApiError && [400, 401, 403].includes(error.status);
 }
 
 // ---------------------------------------------------------------------------

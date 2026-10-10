@@ -68,9 +68,7 @@ function ownerLabel(structure: AcademicStructure): string {
 /** The owner in one word, for the chip beside the title. */
 function scopeBadge(structure: AcademicStructure) {
   const global = !structure.university && !structure.faculty && !structure.department;
-  return (
-    <Badge tone={global ? 'success' : 'neutral'}>{global ? 'Global' : 'Scoped'}</Badge>
-  );
+  return <Badge tone={global ? 'success' : 'neutral'}>{global ? 'Global' : 'Scoped'}</Badge>;
 }
 
 /**
@@ -91,7 +89,11 @@ function facultyLabel(entry: AcademicStructureFacultyOverride): string {
 }
 
 function kindBadge(kind: AcademicStructureKind) {
-  return <Badge tone={kind === 'LEVEL' ? 'info' : 'neutral'}>{kind === 'LEVEL' ? 'Levels' : 'Years'}</Badge>;
+  return (
+    <Badge tone={kind === 'LEVEL' ? 'info' : 'neutral'}>
+      {kind === 'LEVEL' ? 'Levels' : 'Years'}
+    </Badge>
+  );
 }
 
 type DraftEntry = { order: number; name: string; nameAr: string };
@@ -106,12 +108,7 @@ export function AcademicStructures() {
 
   if (structures.isLoading) return <CardsSkeleton count={2} />;
   if (structures.error) {
-    return (
-      <ErrorState
-        error={structures.error}
-        onRetry={() => void structures.refetch()}
-      />
-    );
+    return <ErrorState error={structures.error} onRetry={() => void structures.refetch()} />;
   }
 
   const rows = structures.data ?? [];
@@ -120,11 +117,12 @@ export function AcademicStructures() {
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs text-muted">
-          Each structure is one ladder of years or levels. A structure is either global (every
-          university inherits it) or scoped to one university or department. Colleges follow their own
-          university&rsquo;s structure by default — unless you pin them to a different one, which
-          wins unless a department defines its own ladder. A pinned college may belong to any university. The number of entries and
-          their names are yours to set; there is no fixed four.
+          Each structure is one ladder: how many rungs a unit has and what they are called. A
+          structure is global (every unit inherits it) or scoped to one university or
+          department. Whether those rungs are years or levels is the unit&rsquo;s{' '}
+          <em>academic system</em>, configured on the Academic systems tab and enforced when a
+          ladder is saved. The number of entries and their names are yours to set; there is no
+          fixed four.
         </p>
         <Button size="sm" onClick={() => setCreating(true)}>
           Add structure
@@ -161,7 +159,11 @@ export function AcademicStructures() {
                     {structure.isActive ? null : <Badge tone="warning">Inactive</Badge>}
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => setAssigning(structure)}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setAssigning(structure)}
+                    >
                       Assign colleges
                     </Button>
                     <Button size="sm" variant="secondary" onClick={() => setEditing(structure)}>
@@ -310,7 +312,10 @@ function CreateStructureDialog({
       toast.error('Choose a university, or make the structure global');
       return;
     }
-    if (level === 'department' && !departmentId) { toast.error('Choose a department or program'); return; }
+    if (level === 'department' && !departmentId) {
+      toast.error('Choose a department');
+      return;
+    }
     try {
       await create.mutateAsync({
         kind,
@@ -342,9 +347,9 @@ function CreateStructureDialog({
     >
       <div className="flex flex-col gap-4">
         <Field
-          label="System"
+          label="Ladder vocabulary"
           required
-          hint="This only changes how the entries are labelled. You name each entry yourself in the next step."
+          hint="Whether the entries you are about to name are years or levels. This must match the owner's academic system — a university or a college that uses years gets a years ladder — and the API will refuse a mismatch rather than create one."
         >
           {({ id }) => (
             <Select
@@ -399,20 +404,84 @@ function CreateStructureDialog({
               </label>
 
               <label className="flex items-start gap-2 rounded-md border border-border p-2.5 text-xs">
-                <input type="radio" name="structure-level" checked={level === 'department'} onChange={() => setLevel('department')} />
-                <span className="text-sm font-medium">One department or program</span>
+                <input
+                  type="radio"
+                  name="structure-level"
+                  checked={level === 'department'}
+                  onChange={() => setLevel('department')}
+                />
+                <span>
+                  <span className="block text-sm font-medium">One department</span>
+                  <span className="text-muted">
+                    Only that department uses it. A department normally follows its college;
+                    this is for one that genuinely needs a different ladder, such as a
+                    preparatory year alongside degree years.
+                  </span>
+                </span>
               </label>
-              {level === 'department' ? <>
-                <Select aria-label="Department university" value={universityId} placeholder="Choose a university" options={(universities.data ?? []).map((u) => ({ value: u.id, label: u.name }))} onChange={(event) => { setUniversityId(event.target.value); setFacultyId(''); setDepartmentId(''); }} />
-                <Select aria-label="Department faculty" value={facultyId} disabled={!universityId} placeholder="Choose a faculty" options={(faculties.data ?? []).map((f) => ({ value: f.id, label: f.name }))} onChange={(event) => { setFacultyId(event.target.value); setDepartmentId(''); }} />
-                <Select aria-label="Department or program" value={departmentId} disabled={!facultyId} placeholder="Choose a department or program" options={(departments.data ?? []).map((d) => ({ value: d.id, label: `${d.studyType === 'PROGRAMS' ? 'Programs' : 'General'} / ${d.name}` }))} onChange={(event) => { setDepartmentId(event.target.value); setKind(departments.data?.find((d) => d.id === event.target.value)?.studyType === 'PROGRAMS' ? 'LEVEL' : 'YEAR'); }} />
-              </> : null}
+              {level === 'department' ? (
+                <>
+                  <Select
+                    aria-label="Department university"
+                    value={universityId}
+                    placeholder="Choose a university"
+                    options={(universities.data ?? []).map((u) => ({
+                      value: u.id,
+                      label: u.name,
+                    }))}
+                    onChange={(event) => {
+                      setUniversityId(event.target.value);
+                      setFacultyId('');
+                      setDepartmentId('');
+                    }}
+                  />
+                  <Select
+                    aria-label="Department college"
+                    value={facultyId}
+                    disabled={!universityId}
+                    placeholder="Choose a college"
+                    options={(faculties.data ?? []).map((f) => ({
+                      value: f.id,
+                      label: f.name,
+                    }))}
+                    onChange={(event) => {
+                      setFacultyId(event.target.value);
+                      setDepartmentId('');
+                    }}
+                  />
+                  <Select
+                    aria-label="Department"
+                    value={departmentId}
+                    disabled={!facultyId}
+                    placeholder="Choose a department"
+                    options={(departments.data ?? []).map((d) => ({
+                      value: d.id,
+                      label: d.name,
+                    }))}
+                    /*
+                      Deliberately does NOT touch `kind`.
+
+                      This handler used to force the System dropdown from the
+                      selected department's studyType. That is exactly the
+                      assumption the product forbids: a PROGRAMS department inside
+                      a year-based college has to show years. The system comes
+                      from the college's configuration now, and the API rejects a
+                      ladder that contradicts it — so silently flipping the
+                      control here would only hide the mismatch.
+                    */
+                    onChange={(event) => setDepartmentId(event.target.value)}
+                  />
+                </>
+              ) : null}
               {level === 'university' ? (
                 <Select
                   aria-label="University"
                   value={universityId}
                   placeholder="Choose a university…"
-                  options={(universities.data ?? []).map((u) => ({ value: u.id, label: u.name }))}
+                  options={(universities.data ?? []).map((u) => ({
+                    value: u.id,
+                    label: u.name,
+                  }))}
                   onChange={(event) => setUniversityId(event.target.value)}
                 />
               ) : null}
@@ -590,9 +659,7 @@ function AssignFacultiesDialog({
 
         <p className="text-xs text-muted">
           {selected.size} college{selected.size === 1 ? '' : 's'} pinned
-          {movedCount > 0
-            ? ` · ${movedCount} will be moved off another structure`
-            : ''}
+          {movedCount > 0 ? ` · ${movedCount} will be moved off another structure` : ''}
         </p>
       </div>
     </Modal>
@@ -773,9 +840,10 @@ function EditEntriesDialog({
             role="status"
           >
             {removedCount} {removedCount === 1 ? 'entry' : 'entries'} will be retired, not
-            deleted. Students and courses already filed under {removedCount === 1 ? 'it' : 'them'}{' '}
-            keep their placement, and {removedCount === 1 ? 'it' : 'they'} will stop appearing in
-            the picker. Adding the same order back restores it.
+            deleted. Students and courses already filed under{' '}
+            {removedCount === 1 ? 'it' : 'them'} keep their placement, and{' '}
+            {removedCount === 1 ? 'it' : 'they'} will stop appearing in the picker. Adding the
+            same order back restores it.
           </p>
         ) : null}
 

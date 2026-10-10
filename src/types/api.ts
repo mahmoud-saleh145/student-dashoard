@@ -78,6 +78,10 @@ export type ApiErrorCode =
   | 'INVALID_CREDENTIALS'
   | 'UNAUTHORIZED'
   | 'SESSION_EXPIRED'
+  // The proxy could not reach the backend to renew the session. Deliberately
+  // NOT in SESSION_ENDING_CODES: the session is still valid, and treating a
+  // transport failure as its end is what produced spurious logouts.
+  | 'SESSION_REFRESH_UNAVAILABLE'
   | 'ACCOUNT_DISABLED'
   | 'ACCOUNT_PENDING'
   | 'PHONE_ALREADY_REGISTERED'

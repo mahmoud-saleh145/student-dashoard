@@ -7,6 +7,7 @@ import { queryKeys } from '@/lib/query-keys';
 import type {
   AcademicStructure,
   AcademicStructureKind,
+  AcademicSystemOverview,
   AcademicYear,
   Department,
   Faculty,
@@ -143,9 +144,16 @@ function useCatalogMutation<TInput>(perform: (input: TInput) => Promise<unknown>
 }
 
 export function useCreateUniversity() {
-  return useCatalogMutation<{ name: string; nameAr: string; logoUrl?: string }>((input) =>
-    api.post('catalog/universities', input),
-  );
+  return useCatalogMutation<{
+    name: string;
+    nameAr: string;
+    logoUrl?: string;
+    /**
+     * The progression system this university's colleges inherit unless one
+     * overrides it. Optional: omitted, the API applies the column default.
+     */
+    defaultAcademicSystem?: AcademicStructureKind;
+  }>((input) => api.post('catalog/universities', input));
 }
 
 export function useUpdateUniversity() {
@@ -155,6 +163,8 @@ export function useUpdateUniversity() {
     nameAr?: string;
     logoUrl?: string | null;
     isActive?: boolean;
+    /** Changing this is an inheritance event for every college without an override. */
+    defaultAcademicSystem?: AcademicStructureKind;
   }>(({ id, ...body }) => api.patch(`catalog/universities/${id}`, body));
 }
 
@@ -162,6 +172,37 @@ export function useCreateFaculty() {
   return useCatalogMutation<{ universityId: string; name: string; nameAr: string }>((input) =>
     api.post('catalog/faculties', input),
   );
+}
+
+/**
+ * Sets or clears a college's academic system override.
+ *
+ * `academicSystemOverride: null` is a real instruction to inherit, not an
+ * omitted field — which is why it is typed as `| null` and why the mutation
+ * below always sends the property. The dedicated route is used rather than
+ * `PATCH catalog/faculties/:id` so this screen can save the academic setting
+ * without also touching names and ordering.
+ */
+export function useSetFacultyAcademicSystemOverride() {
+  return useCatalogMutation<{
+    id: string;
+    academicSystemOverride: AcademicStructureKind | null;
+  }>(({ id, ...body }) => api.put(`catalog/faculties/${id}/academic-system-override`, body));
+}
+
+/**
+ * Every university default and college override, with inheritance made explicit.
+ *
+ * The management view. `inherited` on each college is what lets the screen say
+ * "Inherited — Levels" rather than just "Levels", which is the whole point: an
+ * administrator has to be able to tell a deliberate override from a default
+ * nobody chose.
+ */
+export function useAcademicSystemOverview() {
+  return useQuery({
+    queryKey: queryKeys.catalog.academicSystems,
+    queryFn: () => api.get<AcademicSystemOverview>('catalog/academic-systems'),
+  });
 }
 
 export function useCreateDepartment() {

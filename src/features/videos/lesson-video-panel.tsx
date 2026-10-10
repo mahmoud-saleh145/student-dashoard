@@ -9,8 +9,11 @@ import { ConfirmDialog } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 import {
+  useAdoptForGumlet,
   useDeleteVideo,
+  useGumletAssetState,
   useRetryVideoProcessing,
+  useSyncGumletAsset,
   useVideoStatus,
 } from '@/features/videos/hooks';
 import { useTeacherCapabilities } from '@/features/settings/hooks';
@@ -84,6 +87,17 @@ export function LessonVideoPanel({
   const status = useVideoStatus(videoId, !upload.isBusy);
   const retry = useRetryVideoProcessing(courseId);
   const removeVideo = useDeleteVideo(courseId);
+  const adoptGumlet = useAdoptForGumlet(courseId);
+  const syncGumlet = useSyncGumletAsset(courseId);
+
+  // Once a video is on the Gumlet path, keep its provisioning state fresh so
+  // staff do not have to keep pressing "check status" while Gumlet packages a
+  // 40-minute lecture. The hook stops polling on its own once the asset is
+  // playable or has failed, and only ever reads state the backend already has.
+  const gumletState = useGumletAssetState(
+    videoId,
+    Boolean(videoId) && !upload.isBusy,
+  );
 
   // Admins and the master are unconstrained; a teacher is subject to the
   // platform switch. While it is still loading the control stays hidden, which
@@ -145,6 +159,41 @@ export function LessonVideoPanel({
       toast.success('Processing restarted', 'The stored file is being transcoded again.');
     } catch (error) {
       toast.error(error, 'Processing could not be restarted');
+    }
+  }
+
+  async function runAdopt() {
+    if (!videoId) return;
+    try {
+      await adoptGumlet.mutateAsync(videoId);
+      toast.success(
+        'Sent to Gumlet',
+        'The stored file is being packaged and encrypted. Sync to check on it.',
+      );
+    } catch (error) {
+      toast.error(error, 'This video could not be sent to Gumlet');
+    }
+  }
+
+  async function runSync() {
+    if (!videoId) return;
+    try {
+      const result = await syncGumlet.mutateAsync(videoId);
+      if (result.playable) {
+        toast.success('Ready for students', 'Gumlet finished and the media is encrypted.');
+      } else {
+        // Only success/error are available on the toast API, and an in-flight
+        // Gumlet asset is neither. Using success keeps the message in the same
+        // channel the reader is already watching; the failure case is
+        // surfaced inline by the panel's own alert below.
+        toast.success(
+          result.status === 'errored' || result.status === 'failed'
+            ? 'Gumlet reported a problem — see the error below.'
+            : 'Gumlet has not finished processing yet.',
+        );
+      }
+    } catch (error) {
+      toast.error(error, 'Gumlet status could not be checked');
     }
   }
 
@@ -379,8 +428,133 @@ export function LessonVideoPanel({
           ticket. The dashboard never produces a public or downloadable URL.
         </p>
       ) : null}
+
+      {/* --- delivery provider ----------------------------------------------
+          Only shown once there is a video to talk about. The legacy R2 path
+          stays silent: no badge, no buttons, no change in behaviour.
+
+          Reuses the same ownership gate as every other video write, so this is
+          safe to render for any staff member who can see the panel - the
+          server refuses anything outside their scope. */}
+      {videoId && detail ? (
+        <GumletPanel
+          videoId={videoId}
+          drmProvider={detail.drmProvider}
+          // Prefer the polled provisioning state when it has one; fall back to
+          // the video row so the panel still renders before the first poll
+          // resolves.
+          gumletStatus={gumletState.data?.gumletStatus ?? detail.gumletStatus}
+          gumletError={gumletState.data?.error ?? detail.gumletError}
+          videoStatus={
+            (gumletState.data?.videoStatus as VideoStatus | undefined) ?? currentStatus
+          }
+          canAdopt={currentStatus === 'READY' || currentStatus === 'FAILED'}
+          checking={gumletState.isFetching}
+          onAdopt={() => void runAdopt()}
+          onSync={() => void runSync()}
+          adopting={adoptGumlet.isPending}
+          syncing={syncGumlet.isPending}
+        />
+      ) : null}
     </div>
   );
+}
+
+/**
+ * Gumlet provisioning controls for one video.
+ *
+ * Deliberately narrow: it shows which pipeline the video is on, whether Gumlet
+ * is done, and two actions the backend already authorises. It does not expose
+ * the asset's playback URL, and never renders anything that would let a
+ * signed URL or a credential be copied out of the dashboard.
+ */
+function GumletPanel({
+  videoId,
+  drmProvider,
+  gumletStatus,
+  gumletError,
+  videoStatus,
+  canAdopt,
+  checking,
+  onAdopt,
+  onSync,
+  adopting,
+  syncing,
+}: {
+  videoId: string;
+  drmProvider: 'gumlet' | null;
+  gumletStatus: string | null;
+  gumletError: string | null;
+  videoStatus: VideoStatus | null;
+  canAdopt: boolean;
+  /** True while the auto-refresh poll is in flight. */
+  checking: boolean;
+  onAdopt: () => void;
+  onSync: () => void;
+  adopting: boolean;
+  syncing: boolean;
+}) {
+  if (!drmProvider) {
+    return (
+      <p className="text-xs text-muted">
+        <Badge tone="neutral">Delivered by this platform</Badge> Using R2 storage with
+        encrypted HLS. You can move it to Gumlet for DRM-protected playback — the stored file is
+        sent as-is and nothing on the existing course is removed.
+      </p>
+    );
+  }
+
+  const isFailed = gumletStatus === 'errored' || gumletStatus === 'failed' || videoStatus === 'FAILED';
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone="neutral">Gumlet DRM</Badge>
+        {gumletStatus ? <Badge tone={isFailed ? 'danger' : 'warning'}>{gumletStatus}</Badge> : null}
+      </div>
+
+      {isFailed ? (
+        <p role="alert" className="text-xs font-medium text-danger">
+          {gumletError ?? 'Gumlet reported a problem and this video is not playable.'}
+        </p>
+      ) : videoStatus === 'READY' ? (
+        <p className="text-xs text-muted">
+          Packaged and encrypted. Students play it as DRM-protected DASH.
+        </p>
+      ) : (
+        <p className="text-xs text-muted">
+          Gumlet is packaging this video. This panel refreshes on its own, so
+          there is nothing to do here until it reports ready.
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-1.5">
+        {!drmAssetReady(gumletStatus, videoStatus) ? (
+          <Button type="button" variant="secondary" size="sm" loading={syncing || checking} onClick={onSync}>
+            Check Gumlet status
+          </Button>
+        ) : null}
+        {canAdopt && gumletStatus === null ? (
+          <Button type="button" variant="ghost" size="sm" loading={adopting} onClick={onAdopt}>
+            Move to Gumlet DRM
+          </Button>
+        ) : null}
+      </div>
+
+      {/*
+        Video id only. The Gumlet asset id is an identifier, not a credential,
+        but it is omitted anyway: nothing on this panel needs it, and showing it
+        invites copy-paste into a support ticket.
+      */}
+      <p className="text-[11px] text-muted">Video {videoId}</p>
+    </div>
+  );
+}
+
+/** Whether Gumlet has finished and we should stop offering "check status". */
+function drmAssetReady(gumletStatus: string | null, videoStatus: VideoStatus | null): boolean {
+  if (gumletStatus === 'failed' || gumletStatus === 'errored') return true;
+  return videoStatus === 'READY';
 }
 
 /** A one-line summary beside the badge, or null where it would only repeat. */

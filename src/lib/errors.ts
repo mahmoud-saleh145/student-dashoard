@@ -140,6 +140,7 @@ const DEFAULT_MESSAGES: Partial<Record<string, string>> = {
   INVALID_CREDENTIALS: 'Incorrect phone number or password.',
   UNAUTHORIZED: 'Please sign in to continue.',
   SESSION_EXPIRED: 'Your session has expired. Please sign in again.',
+  SESSION_REFRESH_UNAVAILABLE: 'Your session could not be renewed right now. Please try again.',
   ACCOUNT_DISABLED: 'This account has been disabled.',
   ACCOUNT_PENDING: 'This account is not active yet.',
 

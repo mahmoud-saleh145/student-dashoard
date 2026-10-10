@@ -9,6 +9,7 @@ import { ConfirmDialog, Modal } from '@/components/ui/overlay';
 import { Badge, PageHeader } from '@/components/ui/primitives';
 import { Tabs, TabPanel, useTabParam } from '@/components/ui/tabs';
 import { AcademicStructures } from '@/features/catalog/academic-structures';
+import { AcademicSystemsPanel } from '@/features/catalog/academic-systems-panel';
 import { useToast } from '@/components/ui/toast';
 import {
   useAcademicYears,
@@ -39,12 +40,13 @@ export function OtherData() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Other data"
-        description="Subjects, and the year or level ladders that courses and students are filed under. Universities, colleges and departments are managed under Courses → Academic structure."
+        description="Subjects, the academic system each college uses, and the year or level ladders students are filed under. Universities, colleges and departments are managed under Courses → Academic structure."
       />
 
       <Tabs
         tabs={[
           { id: 'subjects', label: 'Subjects' },
+          { id: 'systems', label: 'Academic systems' },
           { id: 'structures', label: 'Years & levels' },
           { id: 'years', label: 'All entries' },
         ]}
@@ -56,9 +58,21 @@ export function OtherData() {
         <SubjectsPanel />
       </TabPanel>
 
-      {/* The ladders themselves: which system a unit uses, how many entries
-          it has and what they are called. The flat list below stays as the
-          read-only view of every entry across every ladder. */}
+      {/*
+        Two distinct decisions, so two tabs rather than one crowded screen:
+
+          Academic systems — does this university count in years or levels, and
+            does this college override it? This is what determines the
+            resolution order and is the tab an administrator needs first.
+
+          Years & levels   — the actual ladders: how many rungs a unit has and
+            what they are called. Separate because it is a different question
+            and a different frequency.
+      */}
+      <TabPanel id="systems" active={tab}>
+        <AcademicSystemsPanel />
+      </TabPanel>
+
       <TabPanel id="structures" active={tab}>
         <AcademicStructures />
       </TabPanel>
@@ -259,10 +273,9 @@ function SubjectsPanel() {
         message={
           <>
             <strong className="text-foreground">{confirming?.name}</strong> stops being offered
-            when categorising a course. The{' '}
-            {formatNumber(confirming?.courseCount ?? 0)} course
-            {confirming?.courseCount === 1 ? '' : 's'} already using it keep it, and reactivating
-            restores the grouping exactly.
+            when categorising a course. The {formatNumber(confirming?.courseCount ?? 0)} course
+            {confirming?.courseCount === 1 ? '' : 's'} already using it keep it, and
+            reactivating restores the grouping exactly.
           </>
         }
         confirmLabel="Deactivate"
