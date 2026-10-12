@@ -14,6 +14,8 @@ import {
   useSectionAttachments,
   useUpdateAttachment,
 } from '@/features/courses/hooks';
+import { putToStorage, unwrapUpload } from '@/features/uploads/direct-upload';
+import { api } from '@/lib/api-client';
 import { formatBytes } from '@/lib/format';
 import type { AttachmentKind, AttachmentRow } from '@/types/domain';
 
@@ -24,10 +26,13 @@ import type { AttachmentKind, AttachmentRow } from '@/types/domain';
  * only difference is which id the row is created with — duplicating it would
  * have meant fixing the "protected files are never downloadable" rule twice.
  *
- * The bytes go through `/api/upload/attachment`, which streams them to the API
- * and returns an object key. The dashboard never sees a storage URL and offers
- * nowhere to type one: a key can only arrive from an upload the server
- * performed.
+ * The bytes go browser → storage directly, over a presigned PUT the API issues
+ * (see `features/uploads/direct-upload.ts`). They used to be POSTed to
+ * `/api/upload/attachment`, which Vercel rejects above 4.5 MB with
+ * `413 FUNCTION_PAYLOAD_TOO_LARGE` — a 9 MB PDF never reached the API at all.
+ *
+ * The dashboard still never sees a storage URL and offers nowhere to type one:
+ * the key it registers is the server's, minted when the upload was authorised.
  */
 
 const ACCEPT = [
@@ -72,7 +77,11 @@ export function AttachmentsPanel({
   const toast = useToast();
 
   const fileInput = useRef<HTMLInputElement>(null);
+  // Lets a second attempt cancel the first, so two PUTs cannot race for one
+  // panel's UI state.
+  const inFlight = useRef<AbortController | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [title, setTitle] = useState('');
   const [isPreview, setIsPreview] = useState(false);
   const [isProtected, setIsProtected] = useState(true);
@@ -88,30 +97,43 @@ export function AttachmentsPanel({
     }
 
     setUploading(true);
+    inFlight.current?.abort();
+    const abort = new AbortController();
+    inFlight.current = abort;
     try {
-      const params = new URLSearchParams({
-        courseId,
-        filename: file.name,
-        contentType: file.type || 'application/octet-stream',
-      });
+      // 1. Ask the API to authorise this exact upload. It authenticates and
+      //    authorises the caller, validates the filename and content type, and
+      //    returns a key it chose itself. Only JSON goes over this request, so
+      //    the 4.5 MB Function limit is irrelevant here.
+      const signed = unwrapUpload(
+        await api.post(
+          'storage/uploads/attachment',
+          {
+            courseId,
+            filename: file.name,
+            contentType: file.type || 'application/octet-stream',
+            sizeBytes: file.size,
+          },
+          { signal: abort.signal },
+        ),
+      );
 
-      const response = await fetch(`/api/upload/attachment?${params.toString()}`, {
-        method: 'POST',
-        headers: {
-          'x-dashboard-request': '1',
-          'content-type': file.type || 'application/octet-stream',
-        },
-        body: file,
-      });
-
-      const payload = (await response.json().catch(() => null)) as
-        | { success?: boolean; data?: { objectKey?: string; sizeBytes?: number }; message?: string }
-        | null;
-
-      if (!response.ok || !payload?.data?.objectKey) {
-        throw new Error(payload?.message ?? 'The upload was refused.');
+      if (!signed) {
+        throw new Error('The upload could not be authorised. Please try again.');
       }
 
+      // 2. The bytes, straight to storage.
+      await putToStorage(
+        file,
+        signed,
+        (percent) => setProgress(percent),
+        abort.signal,
+      );
+      setProgress(100);
+
+      // 3. Register. The API measures what actually landed and enforces the
+      //    200 MB ceiling itself, so a successful PUT is not yet a document —
+      //    and an oversized one is refused HERE, not silently accepted.
       await create.mutateAsync({
         courseId,
         ...(scope.kind === 'lesson'
@@ -119,9 +141,12 @@ export function AttachmentsPanel({
           : { sectionId: scope.sectionId }),
         title: title.trim() || file.name,
         kind: kindFor(file.type),
-        objectKey: payload.data.objectKey,
+        objectKey: signed.objectKey,
         mimeType: file.type || undefined,
-        sizeBytes: payload.data.sizeBytes ?? file.size,
+        // Declared only for the early client-side check above. The API measures
+        // the stored object and persists that instead, so this is never
+        // authoritative — see `AttachmentsService.create`.
+        sizeBytes: file.size,
         isProtected,
         isPreview,
       });
@@ -134,7 +159,9 @@ export function AttachmentsPanel({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'The upload failed');
     } finally {
+      inFlight.current = null;
       setUploading(false);
+      setProgress(0);
     }
   }
 
@@ -247,8 +274,25 @@ export function AttachmentsPanel({
             loading={uploading || create.isPending}
             onClick={() => fileInput.current?.click()}
           >
-            {uploading ? 'Uploading…' : 'Add document'}
+            {uploading ? `Uploading… ${progress}%` : 'Add document'}
           </Button>
+          {/* Progress from bytes actually sent, not an animation. The previous
+              flow streamed through a Function and showed only a spinner, which
+              is indistinguishable from a hang across a 200 MB upload. */}
+          {uploading ? (
+            <div
+              role="progressbar"
+              aria-valuenow={progress}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="h-1.5 w-28 overflow-hidden rounded-full bg-line"
+            >
+              <div
+                className="h-full rounded-full bg-brand transition-[width] duration-200"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          ) : null}
         </div>
       </div>
 

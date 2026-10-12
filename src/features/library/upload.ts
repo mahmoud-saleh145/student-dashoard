@@ -2,27 +2,33 @@
 
 import { useCallback, useRef, useState } from 'react';
 
+import { putToStorage, unwrapUpload } from '@/features/uploads/direct-upload';
+import { api } from '@/lib/api-client';
 import { ApiError } from '@/lib/errors';
 
 /**
  * Uploading a library document.
  *
- * One step: `POST /api/upload/library-document` with the raw bytes. That route
- * attaches the session's access token and streams the body to the API, which
- * streams it on to the Library bucket. The server still chooses the object
- * key — a client cannot name one — and the key is the only thing that comes
- * back into the application, to be handed to
- * `POST /library/materials/:id/parts` as `objectKey`.
+ * Three steps: ask the API to authorise the upload (`POST
+ * storage/uploads/library-document`), PUT the bytes straight at the presigned
+ * URL it returns, then hand the returned key to
+ * `POST /library/materials/:id/parts`. The server chooses the object key — a
+ * client cannot name one — and only the key crosses back into the application.
  *
- * **Why not browser→R2 with a presigned PUT?** That upload is cross-origin, so
- * it requires a CORS policy on the bucket; without one the preflight fails
- * before a byte moves, which is what produced "The upload could not reach
- * storage" on every attempt. Going through our own origin needs no CORS. The
- * backend's presigned route still exists and still works for anyone who
- * configures CORS later; this module simply does not depend on it.
+ * **These bytes used to be POSTed to `/api/upload/library-document`.** That
+ * route is a Vercel Function, and Vercel caps a Function request body at 4.5 MB
+ * and answers `413 FUNCTION_PAYLOAD_TOO_LARGE`. Any Library document above that
+ * failed without the API ever seeing it, which is why the 200 MB limit did not
+ * help. Going direct removes the Function from the data path entirely; only
+ * JSON still crosses it, and JSON is small.
  *
- * Nothing is buffered end to end — Next pipes to the API, the API pipes to
- * storage — so a large document costs a held connection rather than memory.
+ * This module previously documented why browser→storage was *not* used: the
+ * cross-origin preflight needs a CORS rule on the Library bucket, and without
+ * one every attempt failed with "The upload could not reach storage". That is
+ * still true — the route is only correct once **the CORS rule exists** (see
+ * `edu-backend/docs/r2-cors.json`, which must be applied to the Library
+ * bucket). The code is now in place for it; the bucket configuration is the
+ * remaining deployment step, not a code change.
  *
  * **No permanent or public URL is ever produced:** the bucket is private and
  * students read a document through a separate viewer-bound signed URL.
@@ -46,17 +52,14 @@ export const LIBRARY_UPLOAD_MAX_BYTES = 200 * 1024 * 1024;
 /** The backend's `@Matches` on `filename`, copied rather than approximated. */
 const FILENAME_PATTERN = /^[\w .()\-؀-ۿ]+\.[A-Za-z0-9]{1,8}$/;
 
-/** What the upload route returns once the bytes are stored. */
+/**
+ * What the upload yields once the bytes are stored.
+ *
+ * Only the object key: the size that gets registered is measured by the API
+ * from the stored object, so carrying one here would imply it is trusted.
+ */
 export interface StoredUpload {
   objectKey: string;
-  sizeBytes: number;
-}
-
-/** The envelope the upload route replies with, success or failure. */
-interface UploadResponse {
-  success?: boolean;
-  data?: StoredUpload;
-  message?: string;
 }
 
 export type UploadPhase = 'idle' | 'preparing' | 'uploading' | 'done' | 'error';
@@ -110,76 +113,6 @@ export function validateLibraryFile(file: File): string | null {
   return null;
 }
 
-/**
- * Sends the bytes to our own upload route and reports progress.
- *
- * `XMLHttpRequest` rather than `fetch`, for one reason: upload progress. A
- * `fetch` gives no way to observe bytes sent, and a 200 MB upload with no
- * feedback is indistinguishable from a hung tab.
- *
- * `x-dashboard-request` is the same header every mutating call through the
- * proxy carries; the route refuses the request without it, which is what stops
- * a cross-site form from posting here on a signed-in admin's behalf.
- */
-function postWithProgress(
-  file: File,
-  onProgress: (percent: number) => void,
-  signal: AbortSignal,
-): Promise<StoredUpload> {
-  const query = new URLSearchParams({
-    filename: file.name,
-    contentType: file.type,
-  });
-
-  return new Promise((resolve, reject) => {
-    const request = new XMLHttpRequest();
-    request.open('POST', `/api/upload/library-document?${query.toString()}`, true);
-    request.setRequestHeader('x-dashboard-request', '1');
-    request.setRequestHeader('content-type', file.type);
-
-    request.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
-      }
-    };
-
-    request.onload = () => {
-      // `typeof payload` here would narrow to the initialiser's `null`, so the
-      // response shape is named once and referred to by name.
-      let payload: UploadResponse | null = null;
-
-      try {
-        payload = JSON.parse(request.responseText) as UploadResponse;
-      } catch {
-        payload = null;
-      }
-
-      if (request.status >= 200 && request.status < 300 && payload?.data?.objectKey) {
-        resolve(payload.data);
-        return;
-      }
-
-      // The route returns the API's own message where it has one, so a
-      // rejected file type or an oversized document reads as itself rather
-      // than as a status code.
-      reject(
-        new Error(
-          payload?.message ?? `The upload was refused (${request.status}).`,
-        ),
-      );
-    };
-
-    request.onerror = () =>
-      reject(new Error('The upload could not reach the server. Check the connection.'));
-    request.onabort = () => reject(new DOMException('Aborted', 'AbortError'));
-    request.ontimeout = () => reject(new Error('The upload timed out.'));
-
-    signal.addEventListener('abort', () => request.abort(), { once: true });
-
-    request.send(file);
-  });
-}
-
 export interface UseLibraryUploadResult extends UploadState {
   upload: (file: File) => Promise<string | null>;
   cancel: () => void;
@@ -224,10 +157,30 @@ export function useLibraryUpload(): UseLibraryUploadResult {
     });
 
     try {
+      // Authorise the upload. JSON only, so the 4.5 MB Function limit does not
+      // apply, and the key that comes back is the server's.
+      const signed = unwrapUpload(
+        await api.post(
+          'storage/uploads/library-document',
+          {
+            filename: file.name,
+            contentType: file.type,
+            sizeBytes: file.size,
+          },
+          { signal: abort.signal },
+        ),
+      );
+
+      if (!signed) {
+        throw new Error('The upload could not be authorised. Please try again.');
+      }
+
       setState((current) => ({ ...current, phase: 'uploading' }));
 
-      const stored = await postWithProgress(
+      // The bytes, straight to storage.
+      await putToStorage(
         file,
+        signed,
         (progress) => setState((current) => ({ ...current, progress })),
         abort.signal,
       );
@@ -236,10 +189,10 @@ export function useLibraryUpload(): UseLibraryUploadResult {
         ...current,
         phase: 'done',
         progress: 100,
-        objectKey: stored.objectKey,
+        objectKey: signed.objectKey,
       }));
 
-      return stored.objectKey;
+      return signed.objectKey;
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         setState(IDLE);

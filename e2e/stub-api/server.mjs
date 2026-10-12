@@ -1119,6 +1119,25 @@ const server = createServer(async (req, res) => {
 
 
   // --- storage presign ----------------------------------------------------
+  //
+  // Both document flows authorise then PUT browser->storage directly. Proxying
+  // the bytes through a Function failed at Vercel's 4.5 MB body cap, so only
+  // JSON crosses one now.
+  if (path === '/storage/uploads/attachment' && method === 'POST') {
+    const body = await readBody(req);
+    const ext = (body.filename ?? '').includes('.')
+      ? `.${String(body.filename).split('.').pop().toLowerCase()}`
+      : '.bin';
+
+    return ok(res, {
+      // Write-only, short-lived, and scoped to one key the SERVER chose.
+      uploadUrl: `http://127.0.0.1:${PORT}/__storage__/media/attachments/stub-${Date.now()}${ext}`,
+      objectKey: `attachments/${body.courseId ?? 'course-1'}/stub-${control.nextAttachmentId}${ext}`,
+      expiresIn: 3600,
+      requiredHeaders: { 'Content-Type': body.contentType },
+    });
+  }
+
   if (path === '/storage/uploads/library-document' && method === 'POST') {
     const body = await readBody(req);
     const ext = (body.filename ?? '').includes('.')
