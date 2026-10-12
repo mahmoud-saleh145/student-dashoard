@@ -172,6 +172,7 @@ export function CourseDetail({ courseId }: { courseId: string }) {
               { label: 'Students', value: formatNumber(data.studentCount) },
               { label: 'Sections', value: formatNumber(data.counts.sections) },
               { label: 'Lectures', value: formatNumber(data.counts.lessons) },
+              { label: 'Documents', value: formatNumber(data.counts.attachments) },
               { label: 'Created', value: formatDate(data.createdAt) },
               { label: 'University', value: data.university?.name ?? '—' },
               { label: 'College', value: data.faculty?.name ?? '—' },

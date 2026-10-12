@@ -384,7 +384,7 @@ export interface CourseSummary {
   price: { amount: number; currency: string } | null;
   thumbnailKey: string | null;
   teachers: { id: string; fullName: string; isLead: boolean }[];
-  counts: { enrollments: number; sections: number; lessons: number };
+  counts: { enrollments: number; sections: number; lessons: number; attachments: number };
   studentCount: number;
   university: NamedRef | null;
   faculty: NamedRef | null;
@@ -423,15 +423,29 @@ export interface LessonRow {
   status: ContentStatus;
   isPreview: boolean;
   durationSeconds: number;
-  /** The lecture's live video; a deleted one is reported as null. */
+  /** The lecture's attached video; a deleted one is reported as null. */
   video?: {
     id: string;
     status: VideoStatus;
     durationSeconds: number;
     processingError?: string | null;
+    /**
+     * True when this lecture is showing a file that was uploaded elsewhere and
+     * shared into this course. It is the SAME underlying asset, not a copy, so
+     * the duration and status above are the real ones.
+     */
+    reused?: boolean;
   } | null;
-  /** From the lesson→video relation (0 or 1: a lecture holds one video). */
+  /** A lecture has at most one attached video: 0 or 1. */
   videoCount?: number;
+  /**
+   * True when the attached video was reused from another course rather than
+   * uploaded to this lecture. Used to avoid implying a fresh upload happened.
+   */
+  videoReused?: boolean;
+  /** Course the reused video was originally uploaded to, when reused. */
+  videoSourceCourseId?: string | null;
+  /** Number of live documents attached to this lecture (0 when none). */
   attachmentCount?: number;
 }
 

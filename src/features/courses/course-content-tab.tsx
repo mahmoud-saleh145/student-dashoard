@@ -531,7 +531,24 @@ function SectionCard({
                       <ContentStatusBadge status={lesson.status} />
                       <span>{formatDuration(lesson.durationSeconds)}</span>
                       <span data-testid="lesson-video-count">Videos: {videoCount}</span>
+                      {/* Document count comes straight from the backend's
+                          per-lecture attachment count (`attachmentCount`), which
+                          already excludes soft-deleted rows. A lecture with none
+                          still renders "0" rather than hiding the fact, so staff
+                          can tell "no documents" from "not loaded yet". */}
+                      <span data-testid="lesson-attachment-count">
+                        {lesson.attachmentCount ?? 0}{' '}
+                        {(lesson.attachmentCount ?? 0) === 1 ? 'document' : 'documents'}
+                      </span>
                       {lesson.isPreview ? <Badge tone="info">Free preview</Badge> : null}
+                      {/* Subtle, factual: the file was uploaded elsewhere and is
+                          shared in. Deliberately does NOT say "uploaded" or
+                          show any upload control state. */}
+                      {lesson.videoReused ? (
+                        <Badge tone="neutral" data-testid="lesson-video-reused">
+                          Reused video
+                        </Badge>
+                      ) : null}
                       {lesson.video ? <VideoStatusBadge status={lesson.video.status} /> : null}
                       {lesson.status !== 'PUBLISHED' ? (
                         <span className="text-warning">Not visible to students</span>
