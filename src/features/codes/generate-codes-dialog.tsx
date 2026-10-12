@@ -25,6 +25,35 @@ import { queryKeys } from '@/lib/query-keys';
 import type { CodeTargetType, CourseSummary, SectionRow } from '@/types/domain';
 
 /**
+ * How one course reads in the picker: `Biology (Faculty of Medicine – Cairo
+ * University)`.
+ *
+ * Two courses can easily share a title across colleges — "Anatomy" exists in
+ * every medical faculty — and the picker previously showed the title alone, so
+ * the only way to tell them apart was to guess from the order. The affiliation
+ * is what disambiguates them.
+ *
+ * Display only. The option's `value` stays `course.id`, so selection, the
+ * generate request and the stored batch are byte-for-byte what they were.
+ *
+ * Every one of `faculty` and `university` is nullable on a course, and course
+ * targeting is currently disabled platform-wide, so "neither is set" is the
+ * common case here rather than an edge case. Only the parts that exist are
+ * shown; with none, the label is the bare title rather than `Biology ()`.
+ * A faculty without a university reads `Biology (Faculty of Medicine)`, which
+ * is honest about what is known instead of inventing the missing half.
+ */
+function courseOptionLabel(course: CourseSummary): string {
+  const affiliation = [course.faculty?.name, course.university?.name]
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part));
+
+  return affiliation.length > 0
+    ? `${course.title} (${affiliation.join(' – ')})`
+    : course.title;
+}
+
+/**
  * Generate a batch of cards.
  *
  * The three target types are not variations on a theme — they grant different
@@ -47,6 +76,7 @@ import type { CodeTargetType, CourseSummary, SectionRow } from '@/types/domain';
  * **None of these touch the wallet.** A card is bought offline and redeemed
  * here; wallet credit buys library material and nothing else.
  */
+
 export function GenerateCodesDialog({
   open,
   onClose,
@@ -304,7 +334,7 @@ export function GenerateCodesDialog({
                     placeholder={courses.isLoading ? 'Loading…' : 'Choose a course'}
                     options={(courses.data?.items ?? []).map((course) => ({
                       value: course.id,
-                      label: course.title,
+                      label: courseOptionLabel(course),
                     }))}
                   />
                 )}
