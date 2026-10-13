@@ -154,15 +154,25 @@ export function LessonVideoPanel({
   async function runDelete() {
     if (!videoId) return;
     try {
-      await removeVideo.mutateAsync(videoId);
+      // Always name THIS lecture: for a shared asset the backend detaches it
+      // here only, and it refuses to guess which lecture was meant.
+      const result = await removeVideo.mutateAsync({ videoId, lessonId });
       setDeletedVideoId(videoId);
       setStartedVideoId(null);
       setHandedOffStatus(null);
       upload.reset();
-      toast.success(
-        'Video deleted',
-        'Its stored files were removed. The lecture now has no video.',
-      );
+      if (result?.detached) {
+        const others = result.remainingAttachments ?? 0;
+        toast.success(
+          'Video removed from this lecture',
+          `The stored file was kept: ${others} other lecture${others === 1 ? '' : 's'} still use${others === 1 ? 's' : ''} it.`,
+        );
+      } else {
+        toast.success(
+          'Video deleted',
+          'Its stored files were removed. The lecture now has no video.',
+        );
+      }
     } catch (error) {
       toast.error(error, 'The video could not be deleted');
     } finally {

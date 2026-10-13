@@ -190,20 +190,31 @@ export function useGumletAssetState(videoId: string | null, enabled = true) {
   });
 }
 
+export interface RemoveVideoResult {
+  ok: boolean;
+  /** True when the asset is shared and was only detached from this lecture. */
+  detached?: boolean;
+  /** Other lectures that still use the asset after this removal. */
+  remainingAttachments?: number;
+}
+
 /**
- * Deletes a lecture's video (`DELETE /videos/:id`).
+ * Removes a video from THIS lecture (`DELETE /videos/:id?lessonId=`).
  *
- * Soft on the metadata — watch events reference the row — and hard on the
- * bytes: the HLS output and the uploaded source are purged from storage. Any
- * live playback grant for it is revoked. A new video can be uploaded to the
- * lecture afterwards.
+ * The lecture is always sent: a shared asset is attached to several lectures,
+ * and the backend refuses to guess which one to remove it from. While other
+ * lectures still use it the asset is only detached here; otherwise the
+ * metadata is archived (watch events reference the row) and the HLS output and
+ * the uploaded source are purged. Live playback grants through this lecture are
+ * revoked. A new video can be uploaded to the lecture afterwards.
  */
 export function useDeleteVideo(courseId?: string) {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (videoId: string) => api.delete<{ ok: boolean }>(`videos/${videoId}`),
-    onSuccess: async (_result, videoId) => {
+    mutationFn: ({ videoId, lessonId }: { videoId: string; lessonId: string }) =>
+      api.delete<RemoveVideoResult>(`videos/${videoId}`, undefined, { query: { lessonId } }),
+    onSuccess: async (_result, { videoId }) => {
       queryClient.removeQueries({ queryKey: queryKeys.videos.status(videoId) });
       await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
       if (courseId) {

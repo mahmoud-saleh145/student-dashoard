@@ -167,6 +167,10 @@ test.describe('lecture lifecycle', () => {
       .click();
 
     await expect(page.getByText('Video deleted')).toBeVisible();
+    // The lecture being edited is always named, so a shared asset is removed
+    // from THIS lecture only and the backend never has to guess.
+    const deletes = await page.request.get(`${STUB_API}/__test__/video-deletes`);
+    expect(((await deletes.json()) as { data: { lessonIds: (string | null)[] } }).data.lessonIds).toEqual(['les-1']);
     await page
       .getByRole('dialog', { name: 'Lecture video' })
       .getByRole('button', { name: 'Done' })

@@ -157,6 +157,8 @@ const control = {
   enrollmentState: new Map(),
   /** Videos deleted through DELETE /videos/:id. */
   deletedVideos: new Set(),
+  /** `?lessonId=` sent with each DELETE /videos/:id, in order (null when absent). */
+  videoDeleteLessonIds: [],
   /** courseId -> status after a lifecycle call. */
   courseStatus: new Map(),
   deletedCourses: new Set(),
@@ -1140,6 +1142,7 @@ const server = createServer(async (req, res) => {
       control.lessonStatus.clear();
       control.deletedLessons.clear();
       control.deletedVideos.clear();
+      control.videoDeleteLessonIds.length = 0;
       control.courseStatus.clear();
       control.deletedCourses.clear();
       control.deletedUsers.clear();
@@ -1188,6 +1191,9 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/__test__/requests') {
       return ok(res, { requests: control.requests });
+    }
+    if (path === '/__test__/video-deletes') {
+      return ok(res, { lessonIds: control.videoDeleteLessonIds });
     }
     return fail(res, 404, 'NOT_FOUND', 'Unknown control endpoint.');
   }
@@ -2022,6 +2028,7 @@ const server = createServer(async (req, res) => {
 
   const videoById = /^\/videos\/([^/]+)$/.exec(path);
   if (videoById && method === 'DELETE') {
+    control.videoDeleteLessonIds.push(url.searchParams.get('lessonId'));
     control.deletedVideos.add(videoById[1]);
     control.videos.delete(videoById[1]);
     return ok(res, { ok: true });
