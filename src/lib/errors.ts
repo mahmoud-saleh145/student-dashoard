@@ -25,6 +25,12 @@ export class ApiError extends Error {
    */
   readonly userFacing: boolean;
 
+  /**
+   * How long the API asked the caller to wait, from its `Retry-After` header.
+   * Only ever a duration to show the person — nothing retries on it.
+   */
+  readonly retryAfterSeconds: number | null;
+
   constructor(params: {
     code: ApiErrorCode;
     message: string;
@@ -32,6 +38,7 @@ export class ApiError extends Error {
     fields?: Record<string, string[]> | null;
     requestId?: string | null;
     userFacing?: boolean;
+    retryAfterSeconds?: number | null;
   }) {
     super(params.message);
     this.name = 'ApiError';
@@ -40,6 +47,7 @@ export class ApiError extends Error {
     this.fields = params.fields ?? null;
     this.requestId = params.requestId ?? null;
     this.userFacing = params.userFacing ?? false;
+    this.retryAfterSeconds = params.retryAfterSeconds ?? null;
   }
 
   get endsSession(): boolean {
@@ -61,10 +69,21 @@ interface UnknownErrorBody {
   statusCode?: unknown;
   requestId?: unknown;
   userFacing?: unknown;
+  retryAfterSeconds?: unknown;
 }
 
-/** Turns any response body into an ApiError, never throwing while doing it. */
-export function toApiError(body: unknown, status: number): ApiError {
+/**
+ * Turns any response body into an ApiError, never throwing while doing it.
+ *
+ * `retryAfter` is the API's `Retry-After` header, when the caller has the
+ * response. Without it, a `retryAfterSeconds` in the body — written by this
+ * application's own route handlers — is used instead.
+ */
+export function toApiError(
+  body: unknown,
+  status: number,
+  retryAfter?: string | null,
+): ApiError {
   const source = (body ?? {}) as UnknownErrorBody;
 
   const code =
@@ -87,11 +106,31 @@ export function toApiError(body: unknown, status: number): ApiError {
     requestId: asString(source.requestId) ?? null,
     // Set by this application's own route handlers, never by the API.
     userFacing: source.error?.userFacing === true || source.userFacing === true,
+    retryAfterSeconds: asSeconds(retryAfter) ?? asSeconds(source.retryAfterSeconds),
   });
 }
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * A positive wait in whole seconds, or null.
+ *
+ * Accepts the delta-seconds form of `Retry-After` (what the API sends) and a
+ * plain number. The HTTP-date form is not used by the API and is ignored. A
+ * day is the ceiling: anything longer is not a wait worth printing.
+ */
+function asSeconds(value: unknown): number | null {
+  const seconds =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : NaN;
+
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  return Math.min(Math.ceil(seconds), 24 * 60 * 60);
 }
 
 function asFields(value: unknown): Record<string, string[]> | null {

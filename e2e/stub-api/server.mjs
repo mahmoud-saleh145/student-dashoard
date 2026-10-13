@@ -19,6 +19,9 @@ const PORT = Number(process.env.STUB_API_PORT ?? 4599);
 
 // --- fixtures ---------------------------------------------------------------
 
+/** A staff number whose account is inside its sign-in lockout. */
+const LOCKED_PHONE = '01000000006';
+
 const USERS = {
   '01000000001': {
     id: 'user-master',
@@ -943,6 +946,26 @@ const server = createServer(async (req, res) => {
   if (path === '/auth/login' && method === 'POST') {
     const body = await readBody(req);
     const user = USERS[normalisePhone(body.phone)];
+
+    // An account inside its lockout, answered the way the production API
+    // answers it: no `details` in the body, the remaining wait (9 minutes)
+    // in `Retry-After`.
+    if (normalisePhone(body.phone) === LOCKED_PHONE) {
+      const payload = JSON.stringify({
+        success: false,
+        error: { code: 'RATE_LIMITED', message: 'Too many failed attempts; try again later' },
+        statusCode: 429,
+        code: 'RATE_LIMITED',
+        message: 'Too many failed attempts; try again later',
+        timestamp: new Date().toISOString(),
+      });
+      res.writeHead(429, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(payload),
+        'retry-after': '540',
+      });
+      return res.end(payload);
+    }
 
     if (!user || user.password !== body.password) {
       return fail(res, 401, 'INVALID_CREDENTIALS', 'Incorrect phone number or password.');

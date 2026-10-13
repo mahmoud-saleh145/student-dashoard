@@ -63,6 +63,10 @@ export async function POST(request: NextRequest) {
         error.message,
         error.fields ?? undefined,
         error.userFacing,
+        // Only the wait itself crosses to the page: the API's Retry-After,
+        // already reduced to a number of seconds. Nothing else from the
+        // lockout response does.
+        error.status === 429 ? error.retryAfterSeconds : null,
       );
     }
     return fail(500, 'SERVER_ERROR', 'Sign-in could not be completed.');
@@ -75,16 +79,25 @@ function fail(
   message: string,
   fields?: Record<string, string[]>,
   userFacing = false,
+  retryAfterSeconds: number | null = null,
 ) {
+  const wait = retryAfterSeconds ? { retryAfterSeconds } : {};
   return NextResponse.json(
     {
       success: false,
-      error: { code, message, ...(fields ? { fields } : {}), ...(userFacing ? { userFacing } : {}) },
+      error: {
+        code,
+        message,
+        ...(fields ? { fields } : {}),
+        ...(userFacing ? { userFacing } : {}),
+        ...wait,
+      },
       statusCode: status,
       code,
       message,
       ...(fields ? { errors: fields } : {}),
       ...(userFacing ? { userFacing } : {}),
+      ...wait,
       timestamp: new Date().toISOString(),
     },
     { status },

@@ -31,9 +31,41 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+/** A form-level message, with an Arabic rendering where one is written. */
+type FormError = { text: string; arabic?: string };
+
+/**
+ * The account is locked (twenty wrong passwords lock it for ten minutes) or
+ * its sign-in is being throttled. Either way, say how long is left — "wait a
+ * moment" sent people straight back to retrying a lock that still had minutes
+ * to run. Shown, never acted on: nothing retries the login.
+ */
+function lockoutMessage(retryAfterSeconds: number | null): FormError {
+  if (!retryAfterSeconds) {
+    return {
+      text: 'This account is temporarily locked after too many sign-in attempts. Please wait a few minutes and try again.',
+      arabic:
+        'تم قفل هذا الحساب مؤقتًا بسبب كثرة محاولات تسجيل الدخول. يرجى الانتظار بضع دقائق ثم المحاولة مرة أخرى.',
+    };
+  }
+
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+  return {
+    text: `This account is temporarily locked after too many sign-in attempts. Try again in about ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`,
+    arabic: `تم قفل هذا الحساب مؤقتًا بسبب كثرة محاولات تسجيل الدخول. حاول مرة أخرى بعد حوالي ${arabicMinutes(minutes)}.`,
+  };
+}
+
+function arabicMinutes(minutes: number): string {
+  if (minutes === 1) return 'دقيقة واحدة';
+  if (minutes === 2) return 'دقيقتين';
+  if (minutes <= 10) return `${minutes} دقائق`;
+  return `${minutes} دقيقة`;
+}
+
 export function LoginForm({ nextPath }: { nextPath?: string }) {
   const router = useRouter();
-  const [formError, setFormError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<FormError | null>(null);
 
   const {
     register,
@@ -57,6 +89,11 @@ export function LoginForm({ nextPath }: { nextPath?: string }) {
       router.replace(nextPath ?? '/');
       router.refresh();
     } catch (error) {
+      if (error instanceof ApiError && error.code === 'RATE_LIMITED') {
+        setFormError(lockoutMessage(error.retryAfterSeconds));
+        return;
+      }
+
       if (error instanceof ApiError && error.fields) {
         for (const [field, messages] of Object.entries(error.fields)) {
           if (field === 'phone' || field === 'password') {
@@ -64,24 +101,29 @@ export function LoginForm({ nextPath }: { nextPath?: string }) {
           }
         }
         if (!error.fields.phone && !error.fields.password) {
-          setFormError(messageFor(error));
+          setFormError({ text: messageFor(error) });
         }
         return;
       }
 
-      setFormError(messageFor(error));
+      setFormError({ text: messageFor(error) });
     }
   }
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} noValidate className="flex flex-col gap-4">
       {formError ? (
-        <p
+        <div
           role="alert"
           className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-sm text-danger"
         >
-          {formError}
-        </p>
+          <p>{formError.text}</p>
+          {formError.arabic ? (
+            <p lang="ar" dir="rtl" className="mt-1">
+              {formError.arabic}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       <Field label="Phone number" error={errors.phone?.message} required>
