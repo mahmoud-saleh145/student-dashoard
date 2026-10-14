@@ -24,6 +24,7 @@ import {
 } from '@/features/courses/hooks';
 import { useTeacherCapabilities } from '@/features/settings/hooks';
 import { LessonVideoPanel } from '@/features/videos/lesson-video-panel';
+import { fieldErrors } from '@/lib/errors';
 import { formatDuration } from '@/lib/format';
 import { useSession } from '@/lib/session-context';
 import type { ContentStatus, LessonRow, SectionRow } from '@/types/domain';
@@ -73,6 +74,7 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
     | null
   >(null);
   const [analyticsLesson, setAnalyticsLesson] = useState<LessonRow | null>(null);
+  const [renamingLesson, setRenamingLesson] = useState<LessonRow | null>(null);
   const [videoLesson, setVideoLesson] = useState<LessonRow | null>(null);
   // Documents. Two separate pieces of state rather than one tagged union,
   // because a reader can legitimately have a section's documents open and
@@ -284,9 +286,16 @@ export function CourseContentTab({ courseId }: { courseId: string }) {
               setConfirming({ kind: 'delete-lesson', id: lesson.id, title: lesson.title })
             }
             onOpenAnalytics={setAnalyticsLesson}
+            onRenameLesson={setRenamingLesson}
           />
         ))
       )}
+
+      <RenameLessonModal
+        courseId={courseId}
+        lesson={renamingLesson}
+        onClose={() => setRenamingLesson(null)}
+      />
 
       <Modal
         open={addingSection}
@@ -401,6 +410,7 @@ function SectionCard({
   onArchiveLesson,
   onDeleteLesson,
   onOpenAnalytics,
+  onRenameLesson,
 }: {
   section: SectionRow;
   canDelete: boolean;
@@ -416,6 +426,7 @@ function SectionCard({
   onArchiveLesson: (lesson: LessonRow) => void;
   onDeleteLesson: (lesson: LessonRow) => void;
   onOpenAnalytics: (lesson: LessonRow) => void;
+  onRenameLesson: (lesson: LessonRow) => void;
 }) {
   const rows = section.lessons ?? [];
   const sectionVisible = section.status === 'PUBLISHED';
@@ -470,6 +481,7 @@ function SectionCard({
             {rows.map((lesson) => {
               const videoCount = lesson.videoCount ?? (lesson.video ? 1 : 0);
               const items: ActionMenuItem[] = [
+                { label: 'Rename lecture', onSelect: () => onRenameLesson(lesson) },
                 {
                   label: lesson.video ? 'Manage video' : 'Add video',
                   onSelect: () => onOpenVideo(lesson),
@@ -530,7 +542,17 @@ function SectionCard({
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                       <ContentStatusBadge status={lesson.status} />
                       <span>{formatDuration(lesson.durationSeconds)}</span>
-                      <span data-testid="lesson-video-count">Videos: {videoCount}</span>
+                      <span>
+                        <span data-testid="lesson-video-count">Videos: {videoCount}</span>
+                        {' · '}
+                        {/* The lecture's own documents, as the "Lecture
+                            documents" dialog lists them — counted by the API
+                            in the same query as the lectures, not fetched per
+                            row. Section-level files are not included. */}
+                        <span data-testid="lesson-document-count">
+                          {formatDocumentCount(lesson.attachmentCount)}
+                        </span>
+                      </span>
                       {lesson.isPreview ? <Badge tone="info">Free preview</Badge> : null}
                       {lesson.video ? <VideoStatusBadge status={lesson.video.status} /> : null}
                       {lesson.status !== 'PUBLISHED' ? (
@@ -737,6 +759,126 @@ function LessonVideoModal({
           existingVideo={lesson.video}
         />
       ) : null}
+    </Modal>
+  );
+}
+
+/** "0 Documents", "1 Document", "3 Documents". Unknown reads as an em dash. */
+function formatDocumentCount(count: number | undefined): string {
+  if (count === undefined) return '— Documents';
+  return `${count} ${count === 1 ? 'Document' : 'Documents'}`;
+}
+
+/** Same limits the API applies to `PATCH /admin/lessons/:id { title }`. */
+const LESSON_TITLE_MAX = 200;
+
+/**
+ * Renaming a lecture in place.
+ *
+ * Sends only `title` to the existing lesson update, so the lecture keeps its
+ * id and with it its video, documents, free/paid setting, status, progress and
+ * viewers. Students read the title live from the lecture, so the new name is
+ * what they see on their next load.
+ */
+function RenameLessonModal({
+  courseId,
+  lesson,
+  onClose,
+}: {
+  courseId: string;
+  lesson: LessonRow | null;
+  onClose: () => void;
+}) {
+  // Keyed by lecture so the field always starts from the saved title of the
+  // lecture being renamed, never from a previous one.
+  return lesson ? (
+    <RenameLessonForm key={lesson.id} courseId={courseId} lesson={lesson} onClose={onClose} />
+  ) : null;
+}
+
+function RenameLessonForm({
+  courseId,
+  lesson,
+  onClose,
+}: {
+  courseId: string;
+  lesson: LessonRow;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const updateLesson = useUpdateLesson(courseId);
+  const [title, setTitle] = useState(lesson.title);
+  const [serverError, setServerError] = useState<string[] | undefined>(undefined);
+
+  const trimmed = title.trim();
+  const unchanged = trimmed === lesson.title;
+  const localError =
+    trimmed.length === 0
+      ? 'Enter a title.'
+      : trimmed.length > LESSON_TITLE_MAX
+        ? `At most ${LESSON_TITLE_MAX} characters.`
+        : undefined;
+
+  async function submit() {
+    if (localError || unchanged || updateLesson.isPending) return;
+    setServerError(undefined);
+
+    try {
+      await updateLesson.mutateAsync({ lessonId: lesson.id, title: trimmed });
+      toast.success('Lecture renamed', `It is now “${trimmed}”.`);
+      onClose();
+    } catch (error) {
+      const fields = fieldErrors(error);
+      if (fields.title?.length) setServerError(fields.title);
+      else toast.error(error, 'The lecture could not be renamed');
+    }
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Rename lecture"
+      description={`Currently “${lesson.title}”. Only the title changes — its video, documents, access and viewers stay as they are.`}
+      busy={updateLesson.isPending}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={updateLesson.isPending}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void submit()}
+            loading={updateLesson.isPending}
+            disabled={Boolean(localError) || unchanged}
+          >
+            Save title
+          </Button>
+        </>
+      }
+    >
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit();
+        }}
+      >
+        <Field label="Lecture title" required error={serverError ?? (title ? localError : undefined)}>
+          {({ id, describedBy, invalid }) => (
+            <TextInput
+              id={id}
+              value={title}
+              aria-describedby={describedBy}
+              invalid={invalid}
+              maxLength={LESSON_TITLE_MAX}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                setServerError(undefined);
+              }}
+              autoFocus
+            />
+          )}
+        </Field>
+      </form>
     </Modal>
   );
 }

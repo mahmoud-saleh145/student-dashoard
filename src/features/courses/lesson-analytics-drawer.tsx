@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { useCallback, useMemo, useState } from 'react';
 
 import { DataTable, type Column } from '@/components/data/data-table';
 import { ExportButton } from '@/components/data/export-button';
@@ -16,18 +17,22 @@ import {
 } from '@/lib/export-excel';
 import { formatDateTime, formatDuration, formatNumber, formatPercent } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
-import { useListQuery } from '@/lib/use-list-query';
 import type { LessonRow, LessonViewerRow } from '@/types/domain';
 
+/**
+ * `lesson` and `summary` are optional because an API deployed before the
+ * envelope fix drops them (it kept only `items`/`meta`); the drawer must still
+ * render the table against that API rather than crash.
+ */
 interface LessonViewersResponse {
-  lesson: {
+  lesson?: {
     id: string;
     title: string;
     courseTitle: string;
     durationSeconds: number;
     completionRule: { type: string; threshold: number };
   };
-  summary: {
+  summary?: {
     viewers: number;
     completed: number;
     averagePercent: number;
@@ -64,18 +69,44 @@ export function LessonAnalyticsDrawer({
   lesson: LessonRow | null;
   onClose: () => void;
 }) {
-  const list = useListQuery({ defaultPageSize: 20 });
+  // Keyed by lecture, so opening another lecture starts on page 1 with an
+  // empty search instead of inheriting the previous lecture's position.
+  return lesson ? <LessonViewers key={lesson.id} lesson={lesson} onClose={onClose} /> : null;
+}
+
+function LessonViewers({ lesson, onClose }: { lesson: LessonRow; onClose: () => void }) {
+  // Local, not URL, state. This drawer opens over the course page, whose own
+  // lists (the Students tab) keep `page`/`q` in the URL; sharing them meant a
+  // search typed here filtered the Students tab after the drawer closed, and
+  // page 2 of one lecture became page 2 of the next.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [q, setQ] = useState('');
+
+  const onSearch = useCallback((value: string) => {
+    setQ(value);
+    setPage(1);
+  }, []);
+
+  const queryParams = useMemo(
+    () => ({ page, pageSize, ...(q ? { q } : {}) }),
+    [page, pageSize, q],
+  );
 
   const viewers = useQuery({
-    queryKey: queryKeys.lessons.viewers(lesson?.id ?? 'none', list.queryParams),
+    queryKey: queryKeys.lessons.viewers(lesson.id, queryParams),
     queryFn: () =>
-      api.get<LessonViewersResponse>(`analytics/lessons/${lesson?.id}/students`, {
-        query: list.queryParams,
+      api.get<LessonViewersResponse>(`analytics/lessons/${lesson.id}/students`, {
+        query: queryParams,
       }),
-    enabled: Boolean(lesson?.id),
+    placeholderData: (previous) => previous,
   });
 
   const data = viewers.data;
+  // Read defensively: an older API rebuilt this response as `{ items, meta }`
+  // and dropped `lesson`/`summary`, and reading through them crashed the page.
+  const threshold = data?.lesson?.completionRule?.threshold;
+  const summary = data?.summary;
 
   const columns: Column<LessonViewerRow>[] = [
     {
@@ -193,13 +224,13 @@ export function LessonAnalyticsDrawer({
 
   return (
     <Drawer
-      open={lesson !== null}
+      open
       onClose={onClose}
       width="xl"
-      title={lesson?.title ?? 'Lecture'}
+      title={lesson.title}
       description={
-        data
-          ? `Completion is counted at ${data.lesson.completionRule.threshold}% watched, as configured for this course.`
+        threshold !== undefined
+          ? `Completion is counted at ${threshold}% watched, as configured for this course.`
           : 'Viewing activity for this lecture.'
       }
     >
@@ -207,23 +238,23 @@ export function LessonAnalyticsDrawer({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatTile
             label="Viewers"
-            value={formatNumber(data?.summary.viewers)}
+            value={formatNumber(summary?.viewers)}
             loading={viewers.isLoading}
           />
           <StatTile
             label="Completed"
-            value={formatNumber(data?.summary.completed)}
+            value={formatNumber(summary?.completed)}
             tone="success"
             loading={viewers.isLoading}
           />
           <StatTile
             label="Average"
-            value={formatPercent(data?.summary.averagePercent)}
+            value={formatPercent(summary?.averagePercent)}
             loading={viewers.isLoading}
           />
           <StatTile
             label="Total watched"
-            value={formatDuration(data?.summary.totalWatchSeconds)}
+            value={formatDuration(summary?.totalWatchSeconds)}
             loading={viewers.isLoading}
           />
         </div>
@@ -236,38 +267,45 @@ export function LessonAnalyticsDrawer({
           error={viewers.error}
           onRetry={() => void viewers.refetch()}
           meta={data?.meta}
-          onPageChange={list.setPage}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
           caption="Lecture viewers"
-          emptyTitle="Nobody has opened this lecture yet"
-          emptyDescription="Rows appear as soon as a student starts watching."
+          emptyTitle={q ? 'No viewers match this search' : 'Nobody has opened this lecture yet'}
+          emptyDescription={
+            q
+              ? 'Try another name or phone number.'
+              : 'Rows appear as soon as a student starts watching.'
+          }
           toolbar={
             <div className="flex flex-wrap items-center gap-2">
               <SearchInput
-                value={list.q}
-                onChange={list.setSearch}
-                placeholder="Search students…"
+                value={q}
+                onChange={onSearch}
+                placeholder="Search by name or phone…"
                 label="Search viewers"
               />
 
               <div className="ms-auto">
                 <ExportButton
-                  filename={exportFilename(`${lesson?.title ?? 'lecture'}-viewers`)}
+                  filename={exportFilename(`${lesson.title}-viewers`)}
                   sheetName="Viewers"
-                  title={`${data?.lesson.courseTitle ?? ''} — ${lesson?.title ?? ''}`}
+                  title={`${data?.lesson?.courseTitle ?? ''} — ${lesson.title}`}
                   subtitle={
-                    data
-                      ? `Completion threshold ${data.lesson.completionRule.threshold}% · lecture length ${formatDuration(data.lesson.durationSeconds)}`
+                    threshold !== undefined
+                      ? `Completion threshold ${threshold}% · lecture length ${formatDuration(data?.lesson?.durationSeconds)}`
                       : undefined
                   }
                   columns={exportColumns}
-                  loadRows={async (onProgress) => {
-                    if (!lesson) return [];
-                    return fetchAllPages<LessonViewerRow>(
+                  loadRows={(onProgress) =>
+                    fetchAllPages<LessonViewerRow>(
                       `analytics/lessons/${lesson.id}/students`,
-                      list.q ? { q: list.q } : {},
+                      q ? { q } : {},
                       { onProgress },
-                    );
-                  }}
+                    )
+                  }
                 />
               </div>
             </div>

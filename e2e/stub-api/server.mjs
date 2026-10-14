@@ -150,7 +150,11 @@ const control = {
   requests: [],
   /** lessonId -> status overrides and soft deletes, so lifecycle is observable. */
   lessonStatus: new Map(),
+  /** lessonId -> title after a rename, so it survives a refetch. */
+  lessonTitles: new Map(),
   deletedLessons: new Set(),
+  /** enrollmentId -> state after a removal (POST /admin/enrollments/:id/revoke). */
+  enrollmentState: new Map(),
   /** Videos deleted through DELETE /videos/:id. */
   deletedVideos: new Set(),
   /** courseId -> status after a lifecycle call. */
@@ -169,6 +173,181 @@ const control = {
     },
   ],
 };
+
+const STUDENT_PROFILE = {
+  email: null,
+  gender: 'FEMALE',
+  status: 'ACTIVE',
+  university: { id: 'uni-1', name: 'Cairo University', nameAr: 'جامعة القاهرة' },
+  faculty: { id: 'fac-1', name: 'Medicine', nameAr: 'الطب' },
+  department: null,
+  academicYear: { id: 'yr-1', name: 'First Year', nameAr: 'الفرقة الأولى', order: 1 },
+};
+
+/** Course-1's students, in the shape `GET /admin/enrollments` returns. */
+const ENROLLMENTS = [
+  {
+    id: 'enr-1',
+    state: 'ACTIVE',
+    method: 'CODE',
+    user: { id: 'user-student', fullName: 'Sara Student', phone: '01000000004', ...STUDENT_PROFILE },
+    course: { id: 'course-1', title: 'Anatomy I' },
+    coversAllSections: true,
+    sectionIds: null,
+    accessStartsAt: '2026-09-01T10:00:00.000Z',
+    accessEndsAt: null,
+    completedLessons: 3,
+    lastAccessedAt: '2026-10-01T10:00:00.000Z',
+    createdAt: '2026-09-01T10:00:00.000Z',
+    payments: [],
+    redemption: {
+      codeId: 'code-1',
+      code: 'ANAT-1234-ABCD',
+      targetType: 'COURSE',
+      amount: 300,
+      currency: 'EGP',
+      redeemedAt: '2026-09-01T10:00:00.000Z',
+    },
+  },
+  {
+    id: 'enr-2',
+    state: 'ACTIVE',
+    method: 'PAYMENT',
+    user: { id: 'user-omar', fullName: 'Omar Hassan', phone: '01000000009', ...STUDENT_PROFILE, gender: 'MALE' },
+    course: { id: 'course-1', title: 'Anatomy I' },
+    coversAllSections: true,
+    sectionIds: null,
+    accessStartsAt: '2026-09-02T10:00:00.000Z',
+    accessEndsAt: null,
+    completedLessons: 0,
+    lastAccessedAt: null,
+    createdAt: '2026-09-02T10:00:00.000Z',
+    // Filled from PAYMENTS on every read, so refunds show up in the list.
+    paymentIds: ['pay-manual'],
+    redemption: null,
+  },
+  {
+    id: 'enr-3',
+    state: 'ACTIVE',
+    method: 'PAYMENT',
+    user: { id: 'user-laila', fullName: 'Laila Online', phone: '01000000010', ...STUDENT_PROFILE },
+    course: { id: 'course-1', title: 'Anatomy I' },
+    coversAllSections: true,
+    sectionIds: null,
+    accessStartsAt: '2026-09-03T10:00:00.000Z',
+    accessEndsAt: null,
+    completedLessons: 0,
+    lastAccessedAt: null,
+    createdAt: '2026-09-03T10:00:00.000Z',
+    paymentIds: ['pay-paymob'],
+    redemption: null,
+  },
+];
+
+/**
+ * Payments that can be refunded, in piastres. A manual (offline) one and a
+ * Paymob one, because the API treats them differently: a manual refund is
+ * recorded when the admin attests it; a provider refund is a pending request
+ * until it is completed or failed.
+ */
+const PAYMENT_SEED = {
+  'pay-manual': { enrollmentId: 'enr-2', provider: 'MANUAL', amount: 30000 },
+  'pay-paymob': { enrollmentId: 'enr-3', provider: 'PAYMOB', amount: 45000 },
+};
+
+function freshPayments() {
+  return new Map(
+    Object.entries(PAYMENT_SEED).map(([id, p]) => [
+      id,
+      { id, ...p, currency: 'EGP', paidAt: '2026-09-02T10:00:00.000Z', refunded: 0, refunds: [] },
+    ]),
+  );
+}
+
+const egp = (piastres) => Math.round(piastres) / 100;
+const piastresText = (p) => `${Math.floor(p / 100)}.${String(p % 100).padStart(2, '0')}`;
+
+// Set here rather than in `control` because the seed is declared after it.
+control.payments = freshPayments();
+/** idempotencyKey -> { fingerprint, body }, as the API's idempotency_records. */
+control.refundKeys = new Map();
+
+/** How the API records an admin-confirmed completion for this payment. */
+function completionMethodFor(payment) {
+  return payment.provider === 'MANUAL' ? 'ADMIN_CONFIRMED_MANUAL' : 'ADMIN_CONFIRMED_EXTERNAL';
+}
+
+function refundStateOf(payment) {
+  const pending = payment.refunds
+    .filter((r) => r.status === 'PENDING')
+    .reduce((sum, r) => sum + r.amount, 0);
+  const status = paymentStatus(payment);
+  return {
+    refundStatus:
+      pending > 0
+        ? 'PENDING'
+        : status === 'REFUNDED'
+          ? 'REFUNDED'
+          : status === 'PARTIALLY_REFUNDED'
+            ? 'PARTIALLY_REFUNDED'
+            : 'NONE',
+    pendingRefundAmount: egp(pending),
+  };
+}
+
+function paymentStatus(payment) {
+  if (payment.refunded === 0) return 'PAID';
+  return payment.refunded === payment.amount ? 'REFUNDED' : 'PARTIALLY_REFUNDED';
+}
+
+function refundSummary(payment) {
+  const enrollment = ENROLLMENTS.find((e) => e.id === payment.enrollmentId);
+  const pending = payment.refunds
+    .filter((r) => r.status === 'PENDING')
+    .reduce((sum, r) => sum + r.amount, 0);
+  const refundable = Math.max(0, payment.amount - payment.refunded - pending);
+  const status = paymentStatus(payment);
+  return {
+    payment: {
+      id: payment.id,
+      status,
+      provider: payment.provider,
+      providerRefundIntegrated: false,
+      amount: egp(payment.amount),
+      currency: payment.currency,
+      paidAt: payment.paidAt,
+      refundedAmount: egp(payment.refunded),
+      pendingRefundAmount: egp(pending),
+      refundableAmount: egp(refundable),
+      refundableAmountText: piastresText(refundable),
+      eligible: status !== 'REFUNDED' && refundable > 0,
+    },
+    student: { id: enrollment.user.id, fullName: enrollment.user.fullName, phone: enrollment.user.phone },
+    course: enrollment.course,
+    enrollment: { id: enrollment.id, state: control.enrollmentState.get(enrollment.id) ?? enrollment.state },
+    refunds: payment.refunds.map((r) => ({ ...r, amount: egp(r.amount) })),
+  };
+}
+
+/** Viewers of a lecture, in the shape the viewers report returns per row. */
+const LESSON_VIEWERS = Array.from({ length: 23 }, (_, index) => ({
+  student: {
+    id: `viewer-${index + 1}`,
+    fullName: index === 0 ? 'Sara Student' : `Viewer ${String(index + 1).padStart(2, '0')}`,
+    phone: `0100000${String(1000 + index)}`,
+    university: { name: 'Cairo University', nameAr: 'جامعة القاهرة' },
+    faculty: { name: 'Medicine', nameAr: 'الطب' },
+    academicYear: { name: 'First Year', nameAr: 'الفرقة الأولى', order: 1 },
+  },
+  firstWatchedAt: '2026-09-05T10:00:00.000Z',
+  lastWatchedAt: '2026-09-06T10:00:00.000Z',
+  positionSeconds: 600,
+  watchedSeconds: 600,
+  durationSeconds: 1830,
+  percent: index % 3 === 0 ? 100 : 40,
+  completed: index % 3 === 0,
+  completedAt: index % 3 === 0 ? '2026-09-06T10:00:00.000Z' : null,
+}));
 
 const CODES = [
   {
@@ -260,6 +439,8 @@ const DASHBOARD_STATS = {
     refundedAllTime: 500,
     netAllTime: 29500,
     grossInPeriod: 7500,
+    refundedInPeriod: 300,
+    netInPeriod: 7200,
     platformInPeriod: 5000,
     teachersInPeriod: 2500,
   },
@@ -858,6 +1039,10 @@ const server = createServer(async (req, res) => {
       control.courseStatus.clear();
       control.deletedCourses.clear();
       control.deletedUsers.clear();
+      control.lessonTitles.clear();
+      control.payments = freshPayments();
+      control.refundKeys.clear();
+      control.enrollmentState.clear();
       for (const row of control.deviceRequests) row.status = 'PENDING';
       return ok(res, { reset: true });
     }
@@ -1651,9 +1836,15 @@ const server = createServer(async (req, res) => {
           lesson.video && !control.deletedVideos.has(lesson.video.id) ? lesson.video : null;
         return {
           ...lesson,
+          title: control.lessonTitles.get(lesson.id) ?? lesson.title,
           status: control.lessonStatus.get(lesson.id) ?? lesson.status,
           video,
           videoCount: video ? 1 : 0,
+          // Counted from the lecture's own documents, as the API's `_count`
+          // does — so adding or removing one is visible on the next refetch.
+          attachmentCount: [...control.attachments.values()].filter(
+            (row) => row.lessonId === lesson.id,
+          ).length,
         };
       });
     return ok(res, [
@@ -1688,8 +1879,21 @@ const server = createServer(async (req, res) => {
     if (body.status !== undefined && !allowed.includes(body.status)) {
       return fail(res, 422, 'VALIDATION_ERROR', 'status must be a valid ContentStatus');
     }
+    // A rename, validated as the API does: 1–200 characters, stored trimmed,
+    // blank refused.
+    if (body.title !== undefined) {
+      const title = typeof body.title === 'string' ? body.title.trim() : '';
+      if (title.length === 0 || body.title.length > 200) {
+        return fail(res, 422, 'VALIDATION_ERROR', 'title must not be empty');
+      }
+      control.lessonTitles.set(lessonById[1], title);
+    }
     if (body.status) control.lessonStatus.set(lessonById[1], body.status);
-    return ok(res, { id: lessonById[1], status: body.status });
+    return ok(res, {
+      id: lessonById[1],
+      status: body.status,
+      title: control.lessonTitles.get(lessonById[1]),
+    });
   }
   if (lessonById && method === 'DELETE') {
     control.deletedLessons.add(lessonById[1]);
@@ -1922,7 +2126,224 @@ const server = createServer(async (req, res) => {
       ].filter((row) => !control.deletedUsers.has(row.id)),
     );
   }
-  if (path === '/admin/enrollments') return page(res, []);
+  if (path === '/admin/enrollments') {
+    // Course-1's students, so the Students tab has rows to act on. Every other
+    // query (another course, one student's enrollments) stays empty, as it
+    // always was here.
+    if (url.searchParams.get('courseId') !== 'course-1') return page(res, []);
+    const q = (url.searchParams.get('q') ?? '').toLowerCase();
+    return page(
+      res,
+      ENROLLMENTS.map(({ paymentIds, ...row }) => ({
+        ...row,
+        state: control.enrollmentState.get(row.id) ?? row.state,
+        payments: (paymentIds ?? []).map((id) => {
+          const p = control.payments.get(id);
+          return {
+            id,
+            amount: egp(p.amount),
+            currency: p.currency,
+            paidAt: p.paidAt,
+            status: paymentStatus(p),
+            provider: p.provider,
+            refundedAmount: egp(p.refunded),
+            // As the API: refund state beside the payment status, which stays
+            // PAID while a refund is only pending.
+            ...refundStateOf(p),
+          };
+        }),
+      })).filter((row) => !q || row.user.fullName.toLowerCase().includes(q)),
+    );
+  }
+
+  // --- refunds, validated as the API validates them --------------------------
+  const refundSummaryPath = /^\/admin\/payments\/([^/]+)\/refunds$/.exec(path);
+  if (refundSummaryPath && method === 'GET') {
+    if (user.role !== 'ADMIN' && user.role !== 'MASTER') {
+      return fail(res, 403, 'INSUFFICIENT_ROLE', 'Only administrators can refund payments');
+    }
+    const p = control.payments.get(refundSummaryPath[1]);
+    if (!p) return fail(res, 404, 'NOT_FOUND', 'Payment not found');
+    return ok(res, refundSummary(p));
+  }
+
+  const refundPath = /^\/admin\/payments\/([^/]+)\/refund$/.exec(path);
+  if (refundPath && method === 'POST') {
+    const body = await readBody(req);
+    if (user.role !== 'ADMIN' && user.role !== 'MASTER') {
+      return fail(res, 403, 'INSUFFICIENT_ROLE', 'Only administrators can refund payments');
+    }
+    const p = control.payments.get(refundPath[1]);
+    if (!p) return fail(res, 404, 'NOT_FOUND', 'Payment not found');
+    if (!/^[A-Za-z0-9_-]{8,100}$/.test(body.idempotencyKey ?? '')) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'idempotencyKey is invalid');
+    }
+    if (!['FULL', 'PARTIAL'].includes(body.type)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'type must be FULL or PARTIAL');
+    }
+    const completion = body.completion ?? 'IMMEDIATE';
+    if (!['IMMEDIATE', 'PENDING'].includes(completion)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'completion must be IMMEDIATE or PENDING');
+    }
+    // As the API: an immediate (completed) refund needs the admin's explicit
+    // statement that the money was returned; the platform sends none.
+    if (completion === 'IMMEDIATE' && body.confirmMoneyReturned !== true) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'Confirm that the money has actually been returned to the student.');
+    }
+    const fingerprint = JSON.stringify([p.id, body.type, body.amount ?? null, completion]);
+    const seen = control.refundKeys.get(body.idempotencyKey);
+    if (seen) {
+      if (seen.fingerprint !== fingerprint) {
+        return fail(res, 409, 'INVALID_STATE', 'This refund request id was already used for a different refund.');
+      }
+      return ok(res, { ...seen.body, replayed: true });
+    }
+    const { payment: s } = refundSummary(p);
+    const refundable = Math.round(s.refundableAmount * 100);
+    let amount = refundable;
+    if (body.type === 'PARTIAL') {
+      const m = /^(\d+)(?:\.(\d{1,2}))?$/.exec(String(body.amount ?? ''));
+      if (!m) return fail(res, 422, 'VALIDATION_ERROR', 'amount must be a positive amount with at most 2 decimal places');
+      amount = Number(m[1]) * 100 + Number((m[2] ?? '').padEnd(2, '0'));
+      if (amount <= 0) return fail(res, 422, 'VALIDATION_ERROR', 'amount must be greater than 0');
+    } else if (body.amount !== undefined) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'amount is only sent for a partial refund');
+    }
+    if (refundable <= 0) return fail(res, 409, 'INVALID_STATE', 'This payment has already been fully refunded.');
+    if (amount > refundable) {
+      return fail(res, 422, 'VALIDATION_ERROR', `amount must not exceed the refundable balance of ${piastresText(refundable)} EGP`);
+    }
+    const immediate = completion === 'IMMEDIATE';
+    const refund = {
+      id: `ref-${p.refunds.length + 1}-${p.id}`,
+      amount,
+      currency: p.currency,
+      status: immediate ? 'SUCCEEDED' : 'PENDING',
+      completionMethod: immediate ? completionMethodFor(p) : null,
+      reference: null,
+      reason: body.reason ?? null,
+      createdAt: new Date().toISOString(),
+      resolvedAt: immediate ? new Date().toISOString() : null,
+    };
+    p.refunds.push(refund);
+    if (immediate) p.refunded += amount;
+    // Every refund request revokes access to the course.
+    const alreadyRevoked = (control.enrollmentState.get(p.enrollmentId) ?? 'ACTIVE') === 'REVOKED';
+    control.enrollmentState.set(p.enrollmentId, 'REVOKED');
+    const responseBody = {
+      refund: { ...refund, amount: egp(amount) },
+      platformTransferredMoney: false,
+      access: { enrollmentId: p.enrollmentId, revoked: true, alreadyRevoked, cancelledPayments: 0 },
+      summary: refundSummary(p),
+    };
+    control.refundKeys.set(body.idempotencyKey, { fingerprint, body: responseBody });
+    return ok(res, { ...responseBody, replayed: false });
+  }
+
+  const resolveRefund = /^\/admin\/payments\/([^/]+)\/refunds\/([^/]+)\/(complete|fail)$/.exec(path);
+  if (resolveRefund && method === 'POST') {
+    const body = await readBody(req);
+    if (user.role !== 'ADMIN' && user.role !== 'MASTER') {
+      return fail(res, 403, 'INSUFFICIENT_ROLE', 'Only administrators can refund payments');
+    }
+    const [, paymentId, refundId, outcome] = resolveRefund;
+    const p = control.payments.get(paymentId);
+    const refund = p?.refunds.find((r) => r.id === refundId);
+    if (!refund) return fail(res, 404, 'NOT_FOUND', 'Refund request not found');
+    if (outcome === 'complete' && body.confirmMoneyReturned !== true) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'Confirm that the money has actually been returned to the student.');
+    }
+    if (outcome === 'fail' && (typeof body.reason !== 'string' || body.reason.trim().length < 3)) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'reason must be at least 3 characters');
+    }
+    if (refund.status !== 'PENDING') {
+      const same = (outcome === 'complete') === (refund.status === 'SUCCEEDED');
+      if (!same) return fail(res, 409, 'INVALID_STATE', 'This refund request is already resolved.');
+    } else if (outcome === 'complete') {
+      refund.status = 'SUCCEEDED';
+      refund.completionMethod = completionMethodFor(p);
+      refund.reference = typeof body.reference === 'string' && body.reference.trim() ? body.reference.trim() : null;
+      refund.resolvedAt = new Date().toISOString();
+      p.refunded += refund.amount;
+    } else {
+      refund.status = 'FAILED';
+      refund.resolvedAt = new Date().toISOString();
+    }
+    return ok(res, { refund: { ...refund, amount: egp(refund.amount) }, summary: refundSummary(p), replayed: false });
+  }
+
+  // Remove from course. Mirrors the API: administrators only, a reason of
+  // 3–500 characters, an enrollment that must belong to the course named, and
+  // an idempotent repeat that reports `alreadyRemoved` and changes nothing.
+  const revokeEnrollment = /^\/admin\/enrollments\/([^/]+)\/revoke$/.exec(path);
+  if (revokeEnrollment && method === 'POST') {
+    const body = await readBody(req);
+    if (user.role !== 'ADMIN' && user.role !== 'MASTER') {
+      return fail(res, 403, 'INSUFFICIENT_ROLE', 'Only administrators can remove a student from a course');
+    }
+    if (typeof body.reason !== 'string' || body.reason.trim().length < 3) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'reason must be longer than or equal to 3 characters');
+    }
+    const row = ENROLLMENTS.find((e) => e.id === revokeEnrollment[1]);
+    if (!row || (body.courseId && body.courseId !== row.course.id)) {
+      return fail(res, 404, 'NOT_FOUND', 'Enrollment not found');
+    }
+    const alreadyRemoved = (control.enrollmentState.get(row.id) ?? row.state) === 'REVOKED';
+    control.enrollmentState.set(row.id, 'REVOKED');
+    return ok(res, {
+      ok: true,
+      enrollmentId: row.id,
+      userId: row.user.id,
+      courseId: row.course.id,
+      state: 'REVOKED',
+      alreadyRemoved,
+      cancelledPayments: alreadyRemoved ? 0 : 1,
+      revokedPartEntitlements: 0,
+      removedSectionGrants: 0,
+      revokedPlaybackTickets: 0,
+      retained: { paidPayments: 0, codeRedemptions: 1 },
+    });
+  }
+
+  // Lecture viewers: the report object the API returns — `lesson` and
+  // `summary` beside the paginated `items`/`meta`.
+  const lessonViewers = /^\/analytics\/lessons\/([^/]+)\/students$/.exec(path);
+  if (lessonViewers && method === 'GET') {
+    const q = (url.searchParams.get('q') ?? '').toLowerCase();
+    const pageNo = Number(url.searchParams.get('page') ?? '1');
+    const size = Number(url.searchParams.get('pageSize') ?? '20');
+    const all = LESSON_VIEWERS.filter(
+      (row) => !q || row.student.fullName.toLowerCase().includes(q) || row.student.phone.includes(q),
+    );
+    const total = all.length;
+    return ok(res, {
+      lesson: {
+        id: lessonViewers[1],
+        title: 'Skeletal system',
+        courseId: 'course-1',
+        courseTitle: 'Anatomy I',
+        videoId: 'vid-1',
+        durationSeconds: 1830,
+        completionRule: { type: 'WATCH_PERCENT', threshold: 85 },
+      },
+      summary: {
+        viewers: LESSON_VIEWERS.length,
+        completed: LESSON_VIEWERS.filter((row) => row.completed).length,
+        averagePercent: 70,
+        totalWatchSeconds: 2400,
+      },
+      items: all.slice((pageNo - 1) * size, pageNo * size),
+      meta: {
+        page: pageNo,
+        pageSize: size,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / size)),
+        hasNext: pageNo * size < total,
+        hasPrevious: pageNo > 1,
+      },
+    });
+  }
+
   if (path === '/admin/support/tickets') return page(res, []);
   if (path === '/admin/support/counters') {
     return ok(res, { open: 4, pending: 2, resolved: 10, closed: 5, unread: 3, total: 21 });

@@ -2,7 +2,11 @@
 
 import { useState } from 'react';
 
-import { AccountStatusBadge, EnrollmentStateBadge } from '@/components/data/status';
+import {
+  AccountStatusBadge,
+  EnrollmentStateBadge,
+  RefundStatusBadge,
+} from '@/components/data/status';
 import { Button } from '@/components/ui/button';
 import { Field, TextArea, TextInput } from '@/components/ui/field';
 import { ConfirmDialog, Drawer, Modal, ReasonConfirmDialog } from '@/components/ui/overlay';
@@ -284,12 +288,15 @@ export function StudentDrawer({
                                 : ''}
                             </p>
                           ) : enrollment.payments.length > 0 ? (
-                            <p className="mt-1 text-xs text-muted">
-                              {formatMoney(
-                                enrollment.payments[0]?.amount,
-                                enrollment.payments[0]?.currency,
-                              )}{' '}
-                              paid {formatDate(enrollment.payments[0]?.paidAt)}
+                            <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                              <span>
+                                {formatMoney(
+                                  enrollment.payments[0]?.amount,
+                                  enrollment.payments[0]?.currency,
+                                )}{' '}
+                                paid {formatDate(enrollment.payments[0]?.paidAt)}
+                              </span>
+                              <RefundStatusBadge status={enrollment.payments[0]?.refundStatus} />
                             </p>
                           ) : null}
                         </div>

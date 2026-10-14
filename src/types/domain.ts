@@ -453,6 +453,12 @@ export interface AttachmentRow {
   createdAt: string;
 }
 
+/**
+ * A payment's refund state, as the API reports it beside the payment status.
+ *   PENDING — a refund request awaits completion; nothing of it refunded yet.
+ */
+export type RefundStatus = 'NONE' | 'PENDING' | 'PARTIALLY_REFUNDED' | 'REFUNDED';
+
 export interface CourseStudentRow {
   id: string;
   state: EnrollmentState;
@@ -477,7 +483,28 @@ export interface CourseStudentRow {
   completedLessons: number;
   lastAccessedAt: string | null;
   createdAt: string;
-  payments: { id: string; amount: number; currency: string; paidAt: string | null }[];
+  /**
+   * Captured payments for this enrollment, newest first — PAID, and also
+   * PARTIALLY_REFUNDED / REFUNDED so a refund history stays visible.
+   * `status`, `provider` and `refundedAmount` are optional because an API
+   * deployed before refunds sent only PAID rows without them.
+   */
+  payments: {
+    id: string;
+    amount: number;
+    currency: string;
+    paidAt: string | null;
+    status?: 'PAID' | 'PARTIALLY_REFUNDED' | 'REFUNDED';
+    provider?: string;
+    refundedAmount?: number;
+    /**
+     * Refund state, reported BESIDE `status` (which stays PAID while a refund
+     * is only pending — no money has gone back yet). Optional for older APIs.
+     */
+    refundStatus?: RefundStatus;
+    /** Reserved by refund requests not yet completed — not refunded money. */
+    pendingRefundAmount?: number;
+  }[];
   redemption: {
     codeId: string;
     code: string;
@@ -634,6 +661,12 @@ export interface DashboardStats {
     refundedAllTime: number;
     netAllTime: number;
     grossInPeriod: number;
+    /**
+     * Completed refunds in the period, and gross minus them. Optional: an API
+     * deployed before them sends neither, and the tile falls back to gross.
+     */
+    refundedInPeriod?: number;
+    netInPeriod?: number;
     platformInPeriod: number;
     teachersInPeriod: number;
   };

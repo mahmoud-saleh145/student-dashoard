@@ -123,13 +123,60 @@ test.describe('lecture documents', () => {
     await expect(dialog.getByText('problem-sheet.pdf')).toBeVisible();
 
     const row = dialog.getByRole('listitem').filter({ hasText: 'problem-sheet.pdf' });
+    // The row's own switch, not the one in the add form below.
+    const toggle = row.getByRole('switch', { name: /Free Sample/ });
 
-    await row.getByRole('button', { name: /Make a free sample of/ }).click();
-    // The badge on the row, not the switch label in the form below.
-    await expect(row.getByText('Free sample')).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(row.getByText('Free Sample: OFF')).toBeVisible();
 
-    await row.getByRole('button', { name: /Require access for/ }).click();
-    await expect(row.getByRole('button', { name: /Make a free sample of/ })).toBeVisible();
+    const turnOn = page.waitForRequest(
+      (r) => r.method() === 'PATCH' && /\/attachments\/att-\d+$/.test(r.url()),
+    );
+    await toggle.click();
+    expect((await turnOn).postDataJSON()).toEqual({ isPreview: true });
+    await expect(row.getByText('Free Sample: ON')).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-checked', 'true');
+
+    // And back: `false` must be sent as `false`, not re-sent as `true`.
+    const turnOff = page.waitForRequest(
+      (r) => r.method() === 'PATCH' && /\/attachments\/att-\d+$/.test(r.url()),
+    );
+    await toggle.click();
+    expect((await turnOff).postDataJSON()).toEqual({ isPreview: false });
+    await expect(row.getByText('Free Sample: OFF')).toBeVisible();
+  });
+
+  test('a saved free sample reopens as ON, and a new document defaults to OFF', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    let dialog = await openLectureDocs(page);
+
+    // The add form says what it will do before anything is uploaded.
+    await expect(dialog.getByText('Free Sample: OFF')).toBeVisible();
+    await dialog.getByRole('switch', { name: 'Free Sample: OFF' }).click();
+    await expect(dialog.getByRole('switch', { name: 'Free Sample: ON' })).toBeVisible();
+
+    const create = page.waitForRequest(
+      (r) => r.method() === 'POST' && r.url().endsWith('/attachments'),
+    );
+    await dialog.locator('input[type="file"]').setInputFiles(PDF);
+    expect((await create).postDataJSON()).toMatchObject({ isPreview: true });
+    await expect(dialog.getByText('problem-sheet.pdf')).toBeVisible();
+
+    // Reload and reopen: the row reads the saved value back from the API.
+    await page.reload();
+    dialog = await openLectureDocs(page);
+    const row = dialog.getByRole('listitem').filter({ hasText: 'problem-sheet.pdf' });
+    await expect(row.getByRole('switch', { name: 'Free Sample: ON' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    // The form is back at the default for the next document.
+    await expect(
+      dialog.getByRole('switch', { name: 'Free Sample: OFF' }),
+    ).toHaveAttribute('aria-checked', 'false');
   });
 
   test('removes a document after confirming', async ({ page, signIn }) => {

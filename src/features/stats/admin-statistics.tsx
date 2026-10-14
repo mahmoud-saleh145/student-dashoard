@@ -127,10 +127,20 @@ export function AdminStatistics() {
               value={formatNumber(data.purchases.activeEnrollments)}
               hint="students with live access"
             />
+            {/* Net of completed refunds, like "Total revenue" above — it used
+                to show gross, so a refund never moved this figure. Pending
+                refunds are not deducted until they are completed. */}
             <StatTile
               label="Revenue in period"
-              value={formatMoney(data.revenue.grossInPeriod, currency)}
-              hint={`${formatNumber(data.purchases.transactionsInPeriod)} transactions`}
+              value={formatMoney(
+                data.revenue.netInPeriod ?? data.revenue.grossInPeriod,
+                currency,
+              )}
+              hint={
+                data.revenue.refundedInPeriod
+                  ? `${formatMoney(data.revenue.grossInPeriod, currency)} sales − ${formatMoney(data.revenue.refundedInPeriod, currency)} refunded`
+                  : `${formatNumber(data.purchases.transactionsInPeriod)} transactions`
+              }
               tone="success"
             />
             <StatTile
