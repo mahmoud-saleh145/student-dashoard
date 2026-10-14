@@ -7,6 +7,7 @@ import { FilterBar, FilterSelect, SearchInput } from '@/components/data/filters'
 import { Button } from '@/components/ui/button';
 import { Badge, PageHeader } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
+import { collectedLabel } from '@/features/codes/amount-collected';
 import { GenerateCodesDialog } from '@/features/codes/generate-codes-dialog';
 import { useCodeBatches, type BatchCodesResponse } from '@/features/codes/hooks';
 import { api } from '@/lib/api-client';
@@ -59,12 +60,20 @@ export function BatchList() {
         filename: exportFilename(batch.name ?? `${batch.targetName}-batch`),
         sheetName: 'Codes',
         title: `${batch.targetName} — ${batch.name ?? 'access codes'}`,
-        subtitle: `${data.codes.length} cards · ${CODE_TARGET_TYPE_LABEL[batch.targetType]} scope · created ${formatDateTime(batch.createdAt)}`,
+        subtitle: `${data.codes.length} cards · ${CODE_TARGET_TYPE_LABEL[batch.targetType]} scope · collected per card: ${collectedLabel(batch.amountCollected, batch.currency)} · created ${formatDateTime(batch.createdAt)}`,
         columns: [
           { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
           { header: 'Status', key: 'status', width: 14, value: (row) => row.status },
           {
-            header: 'Amount',
+            // Blank when never recorded, 0 when free — the two are not the same.
+            header: 'Collected per card',
+            key: 'amountCollected',
+            width: 16,
+            value: (row) => row.amountCollected ?? null,
+            format: EXCEL_MONEY_FORMAT,
+          },
+          {
+            header: 'Card price',
             key: 'amount',
             width: 12,
             value: (row) => row.amount,
@@ -136,8 +145,22 @@ export function BatchList() {
       ),
     },
     {
+      key: 'amountCollected',
+      header: 'Collected per card',
+      align: 'end',
+      render: (batch) => (
+        <span
+          className={
+            batch.amountCollected ? 'tabular-nums' : 'tabular-nums text-muted'
+          }
+        >
+          {collectedLabel(batch.amountCollected, batch.currency)}
+        </span>
+      ),
+    },
+    {
       key: 'amount',
-      header: 'Price',
+      header: 'Card price',
       align: 'end',
       secondary: true,
       render: (batch) => (

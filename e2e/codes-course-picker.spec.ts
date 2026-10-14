@@ -76,6 +76,7 @@ test.describe('generate codes — course picker labels', () => {
     const dialog = await openGenerateDialog(page);
 
     await dialog.getByLabel('Course').selectOption({ label: EXPECTED_LABEL });
+    await dialog.getByLabel('Amount collected per card').fill('250');
 
     // Captured before the click so the listener is already attached.
     const generateRequest = page.waitForRequest(

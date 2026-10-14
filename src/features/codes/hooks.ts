@@ -40,6 +40,8 @@ export interface BatchCodesResponse {
     code: string;
     status: string;
     amount: number | null;
+    /** Collected per card: 0 is free, null was never recorded (older cards). */
+    amountCollected?: number | null;
     currency: string;
     redemptionCount: number;
     maxRedemptions: number;
@@ -79,6 +81,12 @@ export interface GenerateCodesInput {
   batchName?: string;
   count: number;
   priceAmount?: number;
+  /**
+   * EGP collected per card. Exactly one of this or `free: true` — the backend
+   * refuses neither and both, so no card is issued without a recorded amount.
+   */
+  amountCollected?: number;
+  free?: true;
   expiresAt?: string;
   prefix?: string;
 }
@@ -90,6 +98,9 @@ export interface GenerateCodesResult {
   targetName: string;
   requested: number;
   created: number;
+  /** What the server stored per card (0 when free). */
+  amountCollected?: number;
+  free?: boolean;
   /** The plaintext codes, returned once and only at creation. */
   codes: string[];
 }

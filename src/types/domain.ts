@@ -547,7 +547,14 @@ export interface CodeRow {
   coursePart: { id: string; title: string } | null;
   batchId: string | null;
   batchName: string | null;
+  /** The printed card price, for reference only — never revenue. */
   amount: number | null;
+  /**
+   * What was collected per card: 0 is a free card, null was never recorded
+   * (cards issued before the amount was required). Optional for an API
+   * deployed before it.
+   */
+  amountCollected?: number | null;
   currency: string;
   maxRedemptions: number;
   redemptionCount: number;
@@ -569,6 +576,8 @@ export interface CodeBatchRow {
   cardCount: number;
   prefix: string | null;
   amount: number | null;
+  /** Collected per card: 0 is free, null was never recorded. */
+  amountCollected?: number | null;
   currency: string;
   expiresAt: string | null;
   note: string | null;
@@ -668,9 +677,40 @@ export interface DashboardStats {
     transactionsInPeriod: number;
     enrollmentsInPeriod: number;
     activeEnrollments: number;
+    /**
+     * Paid card sales: cards with a collected amount, counted once at their
+     * first redemption. Wallet top-ups and free cards are not purchases.
+     * Optional (like every field added below) for an API deployed before it.
+     */
+    paidCodeSalesAllTime?: number;
+    paidCodeSalesInPeriod?: number;
+  };
+  /** Redemptions that are not revenue. */
+  activations?: {
+    freeAllTime: number;
+    freeInPeriod: number;
+    /** Cards issued before the amount was required: what was paid is unknown. */
+    unrecordedAllTime: number;
+    unrecordedInPeriod: number;
   };
   revenue: {
     currency: string;
+    /** Money actually collected: code sales + wallet top-ups + online payments (net). */
+    totalAllTime?: number;
+    totalInPeriod?: number;
+    /** Equal to total revenue: no expenses or teacher splits are recorded. */
+    profitAllTime?: number;
+    profitInPeriod?: number;
+    codeSalesAllTime?: number;
+    codeSalesInPeriod?: number;
+    walletTopUpsAllTime?: number;
+    walletTopUpsInPeriod?: number;
+    walletTopUpCountAllTime?: number;
+    walletTopUpCountInPeriod?: number;
+    /** The revenue ledger net of refunds — the same figures as netAllTime / netInPeriod. */
+    onlinePaymentsAllTime?: number;
+    onlinePaymentsInPeriod?: number;
+    // The online-payment ledger alone:
     grossAllTime: number;
     refundedAllTime: number;
     netAllTime: number;
@@ -687,10 +727,15 @@ export interface DashboardStats {
   queues: { supportOpen: number; pendingDeviceRequests: number };
 }
 
+/** One day of `GET /analytics/revenue`, normalised for the chart. */
 export interface RevenuePoint {
   day: string;
-  amount: number;
-  transactions?: number;
+  /** Code sales + wallet top-ups + online payments (net), that day. */
+  total: number;
+  codeSales: number;
+  walletTopUps: number;
+  /** Online payments net of refunds (the revenue ledger). */
+  online: number;
 }
 
 export interface LessonViewerRow {

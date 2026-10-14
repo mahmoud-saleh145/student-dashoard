@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { Field, Select, TextInput } from '@/components/ui/field';
+import { Field, Select, Switch, TextInput } from '@/components/ui/field';
 import { Modal } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
@@ -21,6 +21,7 @@ import {
   exportFilename,
   exportToExcel,
 } from '@/lib/export-excel';
+import { formatMoney } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
 import type { CodeTargetType, CourseSummary, SectionRow } from '@/types/domain';
 
@@ -75,7 +76,21 @@ function courseOptionLabel(course: CourseSummary): string {
  *
  * **None of these touch the wallet.** A card is bought offline and redeemed
  * here; wallet credit buys library material and nothing else.
+ *
+ * **Every card records what was collected for it** — the amount the student
+ * actually paid for one card, or "Free". It becomes revenue when the card is
+ * redeemed; an unused card is never revenue, and a free card's redemption is
+ * an activation. There is no default: an empty amount is what left earlier
+ * cards unreportable, so the dialog will not generate until one is chosen.
  */
+
+/** A positive EGP amount with at most two decimals, within the API's ceiling. */
+function parseCollected(text: string): number | null {
+  const trimmed = text.trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return value > 0 && value <= 1_000_000 ? value : null;
+}
 
 export function GenerateCodesDialog({
   open,
@@ -94,7 +109,8 @@ export function GenerateCodesDialog({
   const [teacherId, setTeacherId] = useState('');
   const [batchName, setBatchName] = useState('');
   const [count, setCount] = useState('1');
-  const [price, setPrice] = useState('');
+  const [collected, setCollected] = useState('');
+  const [free, setFree] = useState(false);
   const [prefix, setPrefix] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
   const [result, setResult] = useState<GenerateCodesResult | null>(null);
@@ -140,13 +156,17 @@ export function GenerateCodesDialog({
           ? Boolean(coursePartId)
           : Boolean(courseId);
 
-  const canSubmit = quantityValid && targetChosen && !generate.isPending;
+  const amountCollected = parseCollected(collected);
+  const amountValid = free || amountCollected !== null;
+
+  const canSubmit = quantityValid && targetChosen && amountValid && !generate.isPending;
 
   function reset() {
     setResult(null);
     setBatchName('');
     setCount('50');
-    setPrice('');
+    setCollected('');
+    setFree(false);
     setPrefix('');
     setExpiresAt('');
     setSectionId('');
@@ -165,7 +185,8 @@ export function GenerateCodesDialog({
         teacherId: targetType === 'TEACHER' ? teacherId : undefined,
         batchName: batchName.trim() || undefined,
         count: quantity,
-        priceAmount: price ? Number(price) : undefined,
+        // Exactly one of the two; the server refuses neither or both.
+        ...(free ? { free: true } : { amountCollected: amountCollected ?? undefined }),
         prefix: prefix.trim() || undefined,
         expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : undefined,
       });
@@ -180,14 +201,24 @@ export function GenerateCodesDialog({
     }
   }
 
+  /** "EGP 600 collected per card" or "Free cards", from what the server stored. */
+  function collectedLabel(created: GenerateCodesResult): string | null {
+    if (created.free) return 'Free cards';
+    if (typeof created.amountCollected === 'number') {
+      return `${formatMoney(created.amountCollected)} collected per card`;
+    }
+    return null;
+  }
+
   async function downloadResult() {
     if (!result) return;
+    const collectedText = collectedLabel(result);
 
     await exportToExcel({
       filename: exportFilename(result.batchName ?? `${result.targetName}-codes`),
       sheetName: 'Codes',
       title: `${result.targetName} — access codes`,
-      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${expiresAt ? ` · expires ${expiresAt}` : ''
+      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${collectedText ? ` · ${collectedText}` : ''}${expiresAt ? ` · expires ${expiresAt}` : ''
         }`,
       columns: [
         { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
@@ -252,6 +283,7 @@ export function GenerateCodesDialog({
             </p>
             <p className="mt-1 text-xs text-success/80">
               Batch “{result.batchName ?? result.batchId.slice(0, 8)}” · {result.targetName}
+              {collectedLabel(result) ? ` · ${collectedLabel(result)}` : ''}
             </p>
           </div>
 
@@ -436,20 +468,46 @@ export function GenerateCodesDialog({
             </Field>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <Field label="Price on the card" hint="For reporting only.">
-              {({ id }) => (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field
+              label="Amount collected per card"
+              required={!free}
+              hint={
+                free
+                  ? 'Free cards collect nothing. Redeeming one counts as an activation, not revenue.'
+                  : 'EGP the student actually paid for one card. It counts as revenue when the card is redeemed.'
+              }
+              error={
+                !free && collected.trim() && amountCollected === null
+                  ? 'Enter an amount above 0 with at most 2 decimals, or mark the cards as free'
+                  : null
+              }
+            >
+              {({ id, describedBy, invalid }) => (
                 <TextInput
                   id={id}
                   type="number"
-                  min={0}
-                  inputMode="numeric"
-                  value={price}
-                  onChange={(event) => setPrice(event.target.value)}
+                  min={0.01}
+                  step={0.01}
+                  inputMode="decimal"
+                  aria-describedby={describedBy}
+                  invalid={invalid}
+                  disabled={free}
+                  value={free ? '' : collected}
+                  onChange={(event) => setCollected(event.target.value)}
                 />
               )}
             </Field>
 
+            <Switch
+              checked={free}
+              onChange={setFree}
+              label="Free cards"
+              description="No money is collected for these cards."
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Prefix" hint="Optional, up to 6 characters.">
               {({ id }) => (
                 <TextInput

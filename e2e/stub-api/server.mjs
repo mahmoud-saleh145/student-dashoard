@@ -362,7 +362,10 @@ const CODES = [
     teacher: null,
     batchId: 'batch-1',
     batchName: 'Term 1 cards',
+    // The printed price and what was collected differ on purpose: a screen
+    // that showed one under the other's name would fail the tests.
     amount: 250,
+    amountCollected: 200,
     currency: 'EGP',
     maxRedemptions: 1,
     redemptionCount: 0,
@@ -371,6 +374,54 @@ const CODES = [
     issuedBy: { id: 'user-admin', fullName: 'Amira Admin' },
     note: null,
     createdAt: '2026-01-05T10:00:00.000Z',
+  },
+  {
+    id: 'code-2',
+    serial: 2,
+    code: 'FREE-CARD-2222',
+    status: 'EXHAUSTED',
+    targetType: 'COURSE',
+    targetName: 'Anatomy 101',
+    course: { id: 'course-1', title: 'Anatomy 101' },
+    section: null,
+    teacher: null,
+    batchId: 'batch-2',
+    batchName: 'Scholarship cards',
+    amount: null,
+    amountCollected: 0,
+    currency: 'EGP',
+    maxRedemptions: 1,
+    redemptionCount: 1,
+    reservedForUserId: null,
+    expiresAt: null,
+    issuedBy: { id: 'user-admin', fullName: 'Amira Admin' },
+    note: null,
+    createdAt: '2026-01-04T10:00:00.000Z',
+  },
+  {
+    // Issued before the amount was required: only a printed price, which is
+    // never shown as — or counted as — what was collected.
+    id: 'code-3',
+    serial: 3,
+    code: 'OLDC-CARD-3333',
+    status: 'EXHAUSTED',
+    targetType: 'COURSE',
+    targetName: 'Anatomy 101',
+    course: { id: 'course-1', title: 'Anatomy 101' },
+    section: null,
+    teacher: null,
+    batchId: 'batch-3',
+    batchName: null,
+    amount: 1000,
+    amountCollected: null,
+    currency: 'EGP',
+    maxRedemptions: 1,
+    redemptionCount: 1,
+    reservedForUserId: null,
+    expiresAt: null,
+    issuedBy: { id: 'user-admin', fullName: 'Amira Admin' },
+    note: null,
+    createdAt: '2026-01-03T10:00:00.000Z',
   },
 ];
 
@@ -426,15 +477,40 @@ const DASHBOARD_STATS = {
     cancelled: 10,
     byStatus: { ACTIVE: 250, EXHAUSTED: 120, EXPIRED: 20, REVOKED: 10 },
   },
+  // Every revenue figure below is a different number, so a tile that read one
+  // field under another's label fails a test instead of passing by accident.
+  // The totals are the sums the backend computes:
+  //   all time:  18,000 codes + 5,000 top-ups + 29,500 online = 52,500
+  //   period:     4,200 codes + 1,000 top-ups +  7,200 online = 12,400
   purchases: {
     paidPayments: 120,
     transactionsAllTime: 120,
     transactionsInPeriod: 30,
     enrollmentsInPeriod: 45,
     activeEnrollments: 300,
+    paidCodeSalesAllTime: 36,
+    paidCodeSalesInPeriod: 7,
+  },
+  activations: {
+    freeAllTime: 12,
+    freeInPeriod: 3,
+    unrecordedAllTime: 30,
+    unrecordedInPeriod: 2,
   },
   revenue: {
     currency: 'EGP',
+    totalAllTime: 52500,
+    totalInPeriod: 12400,
+    profitAllTime: 52500,
+    profitInPeriod: 12400,
+    codeSalesAllTime: 18000,
+    codeSalesInPeriod: 4200,
+    walletTopUpsAllTime: 5000,
+    walletTopUpsInPeriod: 1000,
+    walletTopUpCountAllTime: 10,
+    walletTopUpCountInPeriod: 2,
+    onlinePaymentsAllTime: 29500,
+    onlinePaymentsInPeriod: 7200,
     grossAllTime: 30000,
     refundedAllTime: 500,
     netAllTime: 29500,
@@ -446,6 +522,37 @@ const DASHBOARD_STATS = {
   },
   queues: { supportOpen: 4, pendingDeviceRequests: 1 },
 };
+
+const batchRow = (id, name, amount, amountCollected) => ({
+  id,
+  name,
+  targetType: 'COURSE',
+  targetName: 'Anatomy 101',
+  courseId: 'course-1',
+  sectionId: null,
+  teacherId: null,
+  quantity: 1,
+  cardCount: 1,
+  prefix: null,
+  amount,
+  amountCollected,
+  currency: 'EGP',
+  expiresAt: null,
+  note: null,
+  createdBy: { id: 'user-admin', fullName: 'Amira Admin' },
+  createdAt: '2026-01-05T10:00:00.000Z',
+});
+
+const CODE_BATCHES = [
+  batchRow('batch-1', 'Term 1 cards', 250, 200),
+  batchRow('batch-2', 'Scholarship cards', null, 0),
+  batchRow('batch-3', null, 1000, null),
+];
+
+const REVENUE_SERIES = [
+  { day: '2026-01-10', gross: 0, net: 0, transactions: 0, codeSales: 600, codeSaleCount: 1, walletTopUps: 0, walletTopUpCount: 0, total: 600 },
+  { day: '2026-01-12', gross: 500, net: 500, transactions: 1, codeSales: 300, codeSaleCount: 1, walletTopUps: 450, walletTopUpCount: 1, total: 1250 },
+];
 
 const SETTINGS = {
   'student.deviceLimit': 1,
@@ -1289,7 +1396,10 @@ const server = createServer(async (req, res) => {
   }
 
   if (path === '/analytics/dashboard') return ok(res, DASHBOARD_STATS);
-  if (path === '/analytics/revenue') return ok(res, { points: [] });
+  // A bare array of days, exactly as the backend returns it. This used to be
+  // `{ points: [] }`, a shape the backend never sends, which is how the chart
+  // reading the wrong shape went unnoticed.
+  if (path === '/analytics/revenue') return ok(res, REVENUE_SERIES);
 
   if (path === '/admin/courses' && method === 'POST') {
     // Only an administrator reaches this — the gate above refused everyone
@@ -1493,6 +1603,18 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     lastRequest.generateCodes = body;
 
+    // The backend's rule (CodesService.generateBatch): exactly one of a
+    // positive `amountCollected` or `free: true`. Neither, or both, is refused.
+    const hasAmount = body.amountCollected !== undefined && body.amountCollected !== null;
+    if (body.free === true ? hasAmount : !(hasAmount && Number(body.amountCollected) > 0)) {
+      return fail(
+        res,
+        422,
+        'VALIDATION_ERROR',
+        'amountCollected is required: enter the amount collected per card, or mark the cards as free',
+      );
+    }
+
     return ok(res, {
       batchId: 'batch-new',
       batchName: body.batchName ?? null,
@@ -1501,6 +1623,8 @@ const server = createServer(async (req, res) => {
         body.targetType === 'PART' ? 'Part 1 - Before mid' : 'Anatomy 101',
       requested: body.count ?? 0,
       created: body.count ?? 0,
+      amountCollected: body.free === true ? 0 : Number(body.amountCollected),
+      free: body.free === true,
       codes: Array.from({ length: Math.min(body.count ?? 0, 5) }, (_, i) =>
         `CARD-${String(i + 1).padStart(4, '0')}`,
       ),
@@ -2078,7 +2202,7 @@ const server = createServer(async (req, res) => {
   }
 
   if (path === '/admin/codes') return page(res, CODES);
-  if (path === '/admin/code-batches') return page(res, []);
+  if (path === '/admin/code-batches') return page(res, CODE_BATCHES);
   if (path === '/admin/users') {
     return page(
       res,
