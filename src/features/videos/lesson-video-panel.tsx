@@ -45,7 +45,13 @@ export function LessonVideoPanel({
 }: {
   lessonId: string;
   courseId?: string;
-  existingVideo?: { id: string; status: VideoStatus; durationSeconds: number } | null;
+  existingVideo?: {
+    id: string;
+    status: VideoStatus;
+    durationSeconds: number;
+    /** True when this lecture reuses an asset uploaded elsewhere. */
+    reused?: boolean;
+  } | null;
 }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -106,6 +112,18 @@ export function LessonVideoPanel({
   const { canDeleteVideos } = useTeacherCapabilities();
 
   const detail = status.data && !status.data.deleted ? status.data : undefined;
+
+  /**
+   * True when this lecture is showing a file that lives in other lectures too.
+   *
+   * The lecture list already says "Reused video"; this panel is the next thing
+   * the reader opens, so it has to agree. It also gates the wording of the
+   * delete action, because for a shared asset that action detaches rather than
+   * destroying the stored file.
+   */
+  const isShared =
+    detail?.shared === true ||
+    (detail ? (detail.attachmentCount ?? 1) > 1 : existingVideo?.reused === true);
 
   // When processing settles (READY or FAILED), the lecture list's badge,
   // duration and count are stale — refresh them.
@@ -234,7 +252,11 @@ export function LessonVideoPanel({
               <p className="mt-0.5 text-xs text-muted">
                 {currentStatus === 'READY' && detail
                   ? [
-                      formatDuration(detail.durationSeconds ?? 0),
+                      // No `?? 0` here on purpose. A duration the backend does not know yet is
+                      // UNKNOWN, and `formatDuration` renders unknown as an em
+                      // dash. Coercing it to 0 made the panel claim "0:00" for a
+                      // video whose length was simply not recorded yet.
+                      formatDuration(detail.durationSeconds),
                       detail.height ? `${detail.height}p source` : null,
                       detail.renditions.length
                         ? `${detail.renditions.length} rendition${
@@ -247,6 +269,15 @@ export function LessonVideoPanel({
                       .join(' · ')
                   : 'MP4, MOV, MKV, WebM or AVI. Up to 8 GB.'}
               </p>
+
+              {/* Subtle, factual. Says the file is shared - it does NOT claim
+                  anything was uploaded, and it is shown for a reused asset just
+                  as it is for one this lecture owns. */}
+              {isShared ? (
+                <p className="mt-1 text-xs text-muted" data-testid="panel-video-shared">
+                  Shared with other lectures — the same uploaded video, not a separate copy.
+                </p>
+              ) : null}
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
@@ -410,15 +441,23 @@ export function LessonVideoPanel({
         open={confirmDelete}
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => void runDelete()}
-        title="Delete this video?"
+        title={isShared ? 'Remove this video from this lecture?' : 'Delete this video?'}
         message={
-          <>
-            The video is removed from this lecture and its stored files (the upload and every
-            streaming quality) are deleted. Students can no longer play it; anyone watching is
-            stopped. Watch history is kept. You can upload a new video afterwards.
-          </>
+          isShared ? (
+            <>
+              This video is shared with other lectures. Removing it here detaches it from this
+              lecture ONLY — the uploaded file and its streaming qualities are kept, because the
+              other lectures are still streaming them, and their playback is unaffected.
+            </>
+          ) : (
+            <>
+              The video is removed from this lecture and its stored files (the upload and every
+              streaming quality) are deleted. Students can no longer play it; anyone watching is
+              stopped. Watch history is kept. You can upload a new video afterwards.
+            </>
+          )
         }
-        confirmLabel="Delete video"
+        confirmLabel={isShared ? 'Remove from this lecture' : 'Delete video'}
         busy={removeVideo.isPending}
       />
 

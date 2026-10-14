@@ -14,8 +14,12 @@ const GUMLET_POLL_MS = 5000;
 /** Exactly what `VideosService.status` returns. */
 export interface VideoStatusDetail {
   id: string;
-  lessonId: string;
+  lessonId: string | null;
   courseId: string;
+  /** Live lectures attached to this asset, including the owning one. */
+  attachmentCount?: number;
+  /** True when more than one lecture uses this asset. */
+  shared?: boolean;
   status: VideoStatus;
   durationSeconds: number | null;
   width: number | null;

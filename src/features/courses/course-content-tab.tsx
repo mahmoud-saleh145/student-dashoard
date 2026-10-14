@@ -546,14 +546,27 @@ function SectionCard({
                         <span data-testid="lesson-video-count">Videos: {videoCount}</span>
                         {' · '}
                         {/* The lecture's own documents, as the "Lecture
-                            documents" dialog lists them — counted by the API
-                            in the same query as the lectures, not fetched per
-                            row. Section-level files are not included. */}
+                            documents" dialog lists them: the backend's
+                            per-lecture `attachmentCount`, counted in the same
+                            query as the lectures (not fetched per row) and
+                            already excluding soft-deleted rows. Section-level
+                            files are not included. A lecture with none reads
+                            "0 Documents", and a count that did not arrive reads
+                            "— Documents", so "none" is never confused with
+                            "not loaded". */}
                         <span data-testid="lesson-document-count">
                           {formatDocumentCount(lesson.attachmentCount)}
                         </span>
                       </span>
                       {lesson.isPreview ? <Badge tone="info">Free preview</Badge> : null}
+                      {/* Subtle, factual: the file was uploaded elsewhere and is
+                          shared in. Deliberately does NOT say "uploaded" or
+                          show any upload control state. */}
+                      {lesson.videoReused ? (
+                        <Badge tone="neutral" data-testid="lesson-video-reused">
+                          Reused video
+                        </Badge>
+                      ) : null}
                       {lesson.video ? <VideoStatusBadge status={lesson.video.status} /> : null}
                       {lesson.status !== 'PUBLISHED' ? (
                         <span className="text-warning">Not visible to students</span>
