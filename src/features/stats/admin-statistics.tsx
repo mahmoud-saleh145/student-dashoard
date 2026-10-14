@@ -31,12 +31,12 @@ import type { DashboardStats, RevenuePoint } from '@/types/domain';
  * `GET /analytics/revenue`. Nothing on this page is computed in the browser
  * from a sample, and nothing is placeholder data.
  *
- * Revenue is money actually collected, from three sources, each counted once:
- * paid access cards (the amount recorded when the card was issued, counted
- * when it is first redeemed), wallet top-ups (cash paid for recharge cards),
- * and online payments net of refunds. Profit equals revenue — no expenses are
- * recorded. Free cards and cards whose amount was never recorded are shown as
- * activations beside it, never valued from a course or card price.
+ * Revenue comes from three sources, each counted once: paid access cards (the
+ * price the card was issued at, counted when it is first redeemed), wallet
+ * top-ups (cash paid for recharge cards), and online payments net of refunds.
+ * Profit equals revenue — no expenses are recorded. Free cards (price 0) and
+ * cards issued without a price are shown as activations beside it, never
+ * valued from a course or part catalogue price.
  *
  * Every new revenue field is optional in the type: against an API deployed
  * before them, the tiles fall back to the ledger figures they showed before.
@@ -75,7 +75,7 @@ export function AdminStatistics() {
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Statistics"
-        description="Platform activity, course catalogue and revenue. Revenue is money actually collected — paid cards when redeemed, wallet top-ups and online payments — never a course's listed price."
+        description="Platform activity, course catalogue and revenue. Revenue is each paid card's issued price when it is first redeemed, plus wallet top-ups and online payments — never a course's catalogue price."
         actions={
           <DateRangeFilter
             from={range.from}
@@ -205,7 +205,7 @@ export function AdminStatistics() {
             <StatTile
               label="Amount not recorded"
               value={formatNumber(data.activations?.unrecordedInPeriod ?? 0)}
-              hint={`older cards redeemed with no amount on record · ${formatNumber(data.activations?.unrecordedAllTime ?? 0)} all time · not in revenue`}
+              hint={`cards issued without a price, redeemed · ${formatNumber(data.activations?.unrecordedAllTime ?? 0)} all time · not in revenue`}
               tone={(data.activations?.unrecordedInPeriod ?? 0) > 0 ? 'warning' : 'neutral'}
             />
             <StatTile
@@ -224,7 +224,7 @@ export function AdminStatistics() {
             <Card className="xl:col-span-2">
               <CardHeader
                 title="Revenue"
-                description="Money collected each day: code sales, wallet top-ups and online payments."
+                description="Revenue by day: card sales at their issued price, wallet top-ups and online payments."
               />
               <CardBody>
                 {revenue.isLoading ? (

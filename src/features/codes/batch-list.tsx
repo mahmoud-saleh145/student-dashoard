@@ -7,7 +7,7 @@ import { FilterBar, FilterSelect, SearchInput } from '@/components/data/filters'
 import { Button } from '@/components/ui/button';
 import { Badge, PageHeader } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
-import { collectedLabel } from '@/features/codes/amount-collected';
+import { cardPriceLabel } from '@/features/codes/card-price';
 import { GenerateCodesDialog } from '@/features/codes/generate-codes-dialog';
 import { useCodeBatches, type BatchCodesResponse } from '@/features/codes/hooks';
 import { api } from '@/lib/api-client';
@@ -18,7 +18,7 @@ import {
   exportFilename,
   exportToExcel,
 } from '@/lib/export-excel';
-import { formatDateTime, formatMoney, formatNumber } from '@/lib/format';
+import { formatDateTime, formatNumber } from '@/lib/format';
 import { useListQuery } from '@/lib/use-list-query';
 import {
   CODE_TARGET_TYPES,
@@ -60,19 +60,12 @@ export function BatchList() {
         filename: exportFilename(batch.name ?? `${batch.targetName}-batch`),
         sheetName: 'Codes',
         title: `${batch.targetName} — ${batch.name ?? 'access codes'}`,
-        subtitle: `${data.codes.length} cards · ${CODE_TARGET_TYPE_LABEL[batch.targetType]} scope · collected per card: ${collectedLabel(batch.amountCollected, batch.currency)} · created ${formatDateTime(batch.createdAt)}`,
+        subtitle: `${data.codes.length} cards · ${CODE_TARGET_TYPE_LABEL[batch.targetType]} scope · card price: ${cardPriceLabel(batch.amount, batch.currency)} · created ${formatDateTime(batch.createdAt)}`,
         columns: [
           { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
           { header: 'Status', key: 'status', width: 14, value: (row) => row.status },
           {
-            // Blank when never recorded, 0 when free — the two are not the same.
-            header: 'Collected per card',
-            key: 'amountCollected',
-            width: 16,
-            value: (row) => row.amountCollected ?? null,
-            format: EXCEL_MONEY_FORMAT,
-          },
-          {
+            // Blank when issued without a price, 0 when free — not the same thing.
             header: 'Card price',
             key: 'amount',
             width: 12,
@@ -145,27 +138,13 @@ export function BatchList() {
       ),
     },
     {
-      key: 'amountCollected',
-      header: 'Collected per card',
-      align: 'end',
-      render: (batch) => (
-        <span
-          className={
-            batch.amountCollected ? 'tabular-nums' : 'tabular-nums text-muted'
-          }
-        >
-          {collectedLabel(batch.amountCollected, batch.currency)}
-        </span>
-      ),
-    },
-    {
+      // The issued price per card — what revenue counts on first redemption.
       key: 'amount',
       header: 'Card price',
       align: 'end',
-      secondary: true,
       render: (batch) => (
-        <span className="tabular-nums text-muted">
-          {batch.amount === null ? '—' : formatMoney(batch.amount, batch.currency)}
+        <span className={batch.amount ? 'tabular-nums' : 'tabular-nums text-muted'}>
+          {cardPriceLabel(batch.amount, batch.currency)}
         </span>
       ),
     },

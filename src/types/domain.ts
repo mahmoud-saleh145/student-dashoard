@@ -547,14 +547,12 @@ export interface CodeRow {
   coursePart: { id: string; title: string } | null;
   batchId: string | null;
   batchName: string | null;
-  /** The printed card price, for reference only — never revenue. */
-  amount: number | null;
   /**
-   * What was collected per card: 0 is a free card, null was never recorded
-   * (cards issued before the amount was required). Optional for an API
-   * deployed before it.
+   * The price the card was issued at (`priceAmount`): the revenue figure when
+   * it is first redeemed. 0 is a free card; null means it was issued without
+   * a price. Not the catalogue price, and it never affects redemption.
    */
-  amountCollected?: number | null;
+  amount: number | null;
   currency: string;
   maxRedemptions: number;
   redemptionCount: number;
@@ -575,9 +573,8 @@ export interface CodeBatchRow {
   quantity: number;
   cardCount: number;
   prefix: string | null;
+  /** The batch's per-card issued price: 0 is free, null was issued without one. */
   amount: number | null;
-  /** Collected per card: 0 is free, null was never recorded. */
-  amountCollected?: number | null;
   currency: string;
   expiresAt: string | null;
   note: string | null;

@@ -3,11 +3,13 @@ import type { Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 
 /**
- * Revenue as money actually collected.
+ * Revenue from the issued card price.
  *
- *   revenue   = code sales + wallet top-ups + online payments (net)
- *   profit    = revenue
- *   purchases = paid card sales only
+ *   code sales = each paid card's issued price (`priceAmount`), once, at its
+ *                first redemption — never the catalogue price
+ *   revenue    = code sales + wallet top-ups + online payments (net)
+ *   profit     = revenue
+ *   purchases  = paid card sales only
  *
  * The stub's figures are all different numbers (see DASHBOARD_STATS in the
  * stub), so a tile that showed one field under another's label fails here.
@@ -74,43 +76,46 @@ async function openGenerate(page: Page) {
   return dialog;
 }
 
-test.describe('Generate codes: the amount collected', () => {
-  test('will not generate until an amount is entered or the cards are marked free', async ({
+test.describe('Generate codes: the card price', () => {
+  test('will not generate until a whole-EGP price is entered or the cards are marked free', async ({
     page,
     signIn,
   }) => {
     await signIn('admin');
     const dialog = await openGenerate(page);
     const generate = dialog.getByRole('button', { name: /^Generate \d* ?codes$/ });
-    const amount = dialog.getByLabel('Amount collected per card');
+    const price = dialog.getByLabel('Card price');
 
-    // No default: an empty amount is how earlier cards ended up unrecorded.
+    // No default: cards issued without a price are what left sales unreportable.
     await expect(generate).toBeDisabled();
 
-    for (const bad of ['0', '10.005']) {
-      await amount.fill(bad);
-      await expect(dialog.getByRole('alert')).toContainText('at most 2 decimals');
+    // The API takes whole EGP; 0 is spelled "Free cards", not typed.
+    for (const bad of ['0', '10.5']) {
+      await price.fill(bad);
+      await expect(dialog.getByRole('alert')).toContainText('whole number of EGP');
       await expect(generate).toBeDisabled();
     }
 
-    await amount.fill('600');
+    await price.fill('600');
     await expect(generate).toBeEnabled();
 
-    await amount.fill('');
+    await price.fill('');
     await expect(generate).toBeDisabled();
     await dialog.getByRole('switch', { name: 'Free cards' }).click();
-    await expect(amount).toBeDisabled();
+    await expect(price).toBeDisabled();
     await expect(generate).toBeEnabled();
   });
 
-  test('sends the amount, never a card price, and shows it on the result', async ({
+  test('sends the price as priceAmount — nothing else — and shows it on the result', async ({
     page,
     signIn,
   }) => {
     await signIn('admin');
     const dialog = await openGenerate(page);
 
-    await dialog.getByLabel('Amount collected per card').fill('600');
+    // Below the course's catalogue price (250): the card's own price is sent,
+    // and nothing in the request is derived from the catalogue.
+    await dialog.getByLabel('Card price').fill('200');
     await Promise.all([
       page.waitForResponse((r) => r.url().includes('/api/proxy/admin/codes/generate')),
       dialog.getByRole('button', { name: /^Generate \d* ?codes$/ }).click(),
@@ -119,14 +124,17 @@ test.describe('Generate codes: the amount collected', () => {
     const sent = await (
       await page.request.get(`${STUB_API}/api/v1/__test__/last-generate-codes`)
     ).json();
-    expect(sent.data.amountCollected).toBe(600);
-    expect(sent.data.free).toBeUndefined();
-    expect(sent.data.priceAmount).toBeUndefined();
+    expect(sent.data.priceAmount).toBe(200);
+    expect(sent.data).not.toHaveProperty('amountCollected');
+    expect(sent.data).not.toHaveProperty('free');
 
-    await expect(dialog).toContainText(/600 collected per card/);
+    await expect(dialog).toContainText(/200 per card/);
   });
 
-  test('free cards send free: true and say so on the result', async ({ page, signIn }) => {
+  test('free cards are sent as a price of 0 and say so on the result', async ({
+    page,
+    signIn,
+  }) => {
     await signIn('admin');
     const dialog = await openGenerate(page);
 
@@ -139,15 +147,15 @@ test.describe('Generate codes: the amount collected', () => {
     const sent = await (
       await page.request.get(`${STUB_API}/api/v1/__test__/last-generate-codes`)
     ).json();
-    expect(sent.data.free).toBe(true);
-    expect(sent.data.amountCollected).toBeUndefined();
+    expect(sent.data.priceAmount).toBe(0);
+    expect(sent.data).not.toHaveProperty('free');
 
     await expect(dialog).toContainText('Free cards');
   });
 });
 
-test.describe('Codes and batches: what was collected', () => {
-  test('the code list shows the amount collected, Free, or Not recorded', async ({
+test.describe('Codes and batches: the card price', () => {
+  test('the code list shows each card’s issued price, Free, or Not recorded', async ({
     page,
     signIn,
   }) => {
@@ -156,26 +164,23 @@ test.describe('Codes and batches: what was collected', () => {
 
     const row = (prefix: string) => page.getByRole('row').filter({ hasText: prefix });
 
-    // Collected 200 on a card printed at 250: the collected amount is shown.
+    // Issued at 200 for a course whose catalogue price is 250: the card's
+    // own price is shown, not the catalogue's.
     await expect(row('ABCD')).toContainText(/EGP.200/);
     await expect(row('ABCD')).not.toContainText(/EGP.250/);
     await expect(row('FREE')).toContainText('Free');
-    // A legacy card printed at 1,000: unknown, not 1,000.
+    // Issued without a price: unknown, never filled in from the catalogue.
     await expect(row('OLDC')).toContainText('Not recorded');
-    await expect(row('OLDC')).not.toContainText('1,000');
+    await expect(row('OLDC')).not.toContainText(/EGP.250/);
   });
 
-  test('the batch list shows the collected amount beside the card price', async ({
-    page,
-    signIn,
-  }) => {
+  test('the batch list shows the same per-card price', async ({ page, signIn }) => {
     await signIn('admin');
     await page.goto('/code-batches');
 
     const row = (text: string) => page.getByRole('row').filter({ hasText: text });
 
     await expect(row('Term 1 cards')).toContainText(/EGP.200/);
-    await expect(row('Term 1 cards')).toContainText(/EGP.250/);
     await expect(row('Scholarship cards')).toContainText('Free');
     await expect(row('batch-3')).toContainText('Not recorded');
   });
