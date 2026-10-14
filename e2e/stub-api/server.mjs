@@ -362,10 +362,10 @@ const CODES = [
     teacher: null,
     batchId: 'batch-1',
     batchName: 'Term 1 cards',
-    // The printed price and what was collected differ on purpose: a screen
-    // that showed one under the other's name would fail the tests.
-    amount: 250,
-    amountCollected: 200,
+    // The card's issued price. Deliberately below the course's catalogue
+    // price (250, in COURSES): a screen that showed the catalogue price as
+    // the card's would fail the tests.
+    amount: 200,
     currency: 'EGP',
     maxRedemptions: 1,
     redemptionCount: 0,
@@ -387,8 +387,7 @@ const CODES = [
     teacher: null,
     batchId: 'batch-2',
     batchName: 'Scholarship cards',
-    amount: null,
-    amountCollected: 0,
+    amount: 0,
     currency: 'EGP',
     maxRedemptions: 1,
     redemptionCount: 1,
@@ -399,8 +398,8 @@ const CODES = [
     createdAt: '2026-01-04T10:00:00.000Z',
   },
   {
-    // Issued before the amount was required: only a printed price, which is
-    // never shown as — or counted as — what was collected.
+    // Issued without a price. Shown as "Not recorded" — never filled in from
+    // the course's catalogue price.
     id: 'code-3',
     serial: 3,
     code: 'OLDC-CARD-3333',
@@ -412,8 +411,7 @@ const CODES = [
     teacher: null,
     batchId: 'batch-3',
     batchName: null,
-    amount: 1000,
-    amountCollected: null,
+    amount: null,
     currency: 'EGP',
     maxRedemptions: 1,
     redemptionCount: 1,
@@ -523,7 +521,7 @@ const DASHBOARD_STATS = {
   queues: { supportOpen: 4, pendingDeviceRequests: 1 },
 };
 
-const batchRow = (id, name, amount, amountCollected) => ({
+const batchRow = (id, name, amount) => ({
   id,
   name,
   targetType: 'COURSE',
@@ -535,7 +533,6 @@ const batchRow = (id, name, amount, amountCollected) => ({
   cardCount: 1,
   prefix: null,
   amount,
-  amountCollected,
   currency: 'EGP',
   expiresAt: null,
   note: null,
@@ -544,9 +541,9 @@ const batchRow = (id, name, amount, amountCollected) => ({
 });
 
 const CODE_BATCHES = [
-  batchRow('batch-1', 'Term 1 cards', 250, 200),
-  batchRow('batch-2', 'Scholarship cards', null, 0),
-  batchRow('batch-3', null, 1000, null),
+  batchRow('batch-1', 'Term 1 cards', 200),
+  batchRow('batch-2', 'Scholarship cards', 0),
+  batchRow('batch-3', null, null),
 ];
 
 const REVENUE_SERIES = [
@@ -1603,16 +1600,16 @@ const server = createServer(async (req, res) => {
     const body = await readBody(req);
     lastRequest.generateCodes = body;
 
-    // The backend's rule (CodesService.generateBatch): exactly one of a
-    // positive `amountCollected` or `free: true`. Neither, or both, is refused.
-    const hasAmount = body.amountCollected !== undefined && body.amountCollected !== null;
-    if (body.free === true ? hasAmount : !(hasAmount && Number(body.amountCollected) > 0)) {
-      return fail(
-        res,
-        422,
-        'VALIDATION_ERROR',
-        'amountCollected is required: enter the amount collected per card, or mark the cards as free',
-      );
+    // The backend's rule (GenerateCodesDto): `priceAmount` is optional, a whole
+    // number of EGP from 0 up. It is stored as sent — never filled in from a
+    // catalogue price.
+    const price = body.priceAmount;
+    if (
+      price !== undefined &&
+      price !== null &&
+      !(Number.isInteger(price) && price >= 0 && price <= 1_000_000)
+    ) {
+      return fail(res, 422, 'VALIDATION_ERROR', 'priceAmount must be an integer from 0');
     }
 
     return ok(res, {
@@ -1623,8 +1620,7 @@ const server = createServer(async (req, res) => {
         body.targetType === 'PART' ? 'Part 1 - Before mid' : 'Anatomy 101',
       requested: body.count ?? 0,
       created: body.count ?? 0,
-      amountCollected: body.free === true ? 0 : Number(body.amountCollected),
-      free: body.free === true,
+      priceAmount: price ?? null,
       codes: Array.from({ length: Math.min(body.count ?? 0, 5) }, (_, i) =>
         `CARD-${String(i + 1).padStart(4, '0')}`,
       ),

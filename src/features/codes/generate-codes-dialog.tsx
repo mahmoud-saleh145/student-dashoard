@@ -77,17 +77,19 @@ function courseOptionLabel(course: CourseSummary): string {
  * **None of these touch the wallet.** A card is bought offline and redeemed
  * here; wallet credit buys library material and nothing else.
  *
- * **Every card records what was collected for it** — the amount the student
- * actually paid for one card, or "Free". It becomes revenue when the card is
- * redeemed; an unused card is never revenue, and a free card's redemption is
- * an activation. There is no default: an empty amount is what left earlier
- * cards unreportable, so the dialog will not generate until one is chosen.
+ * **Every card is issued at a price** — what one card is sold for, or "Free".
+ * That price (`priceAmount`) is what revenue reporting counts when the card is
+ * first redeemed; an unused card is never revenue, and a free card's
+ * redemption is an activation. It is not the course's catalogue price, and it
+ * never decides whether the card unlocks anything. There is no default: cards
+ * issued without a price are what left earlier sales unreportable, so the
+ * dialog will not generate until a price or "Free" is chosen.
  */
 
-/** A positive EGP amount with at most two decimals, within the API's ceiling. */
-function parseCollected(text: string): number | null {
+/** A whole EGP price above 0, within the API's ceiling (the API takes integers). */
+function parsePrice(text: string): number | null {
   const trimmed = text.trim();
-  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  if (!/^\d+$/.test(trimmed)) return null;
   const value = Number(trimmed);
   return value > 0 && value <= 1_000_000 ? value : null;
 }
@@ -109,7 +111,7 @@ export function GenerateCodesDialog({
   const [teacherId, setTeacherId] = useState('');
   const [batchName, setBatchName] = useState('');
   const [count, setCount] = useState('1');
-  const [collected, setCollected] = useState('');
+  const [price, setPrice] = useState('');
   const [free, setFree] = useState(false);
   const [prefix, setPrefix] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
@@ -156,16 +158,16 @@ export function GenerateCodesDialog({
           ? Boolean(coursePartId)
           : Boolean(courseId);
 
-  const amountCollected = parseCollected(collected);
-  const amountValid = free || amountCollected !== null;
+  const cardPrice = parsePrice(price);
+  const priceValid = free || cardPrice !== null;
 
-  const canSubmit = quantityValid && targetChosen && amountValid && !generate.isPending;
+  const canSubmit = quantityValid && targetChosen && priceValid && !generate.isPending;
 
   function reset() {
     setResult(null);
     setBatchName('');
     setCount('50');
-    setCollected('');
+    setPrice('');
     setFree(false);
     setPrefix('');
     setExpiresAt('');
@@ -185,8 +187,8 @@ export function GenerateCodesDialog({
         teacherId: targetType === 'TEACHER' ? teacherId : undefined,
         batchName: batchName.trim() || undefined,
         count: quantity,
-        // Exactly one of the two; the server refuses neither or both.
-        ...(free ? { free: true } : { amountCollected: amountCollected ?? undefined }),
+        // Free cards are priced at 0, not left unpriced.
+        priceAmount: free ? 0 : (cardPrice ?? undefined),
         prefix: prefix.trim() || undefined,
         expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : undefined,
       });
@@ -201,24 +203,24 @@ export function GenerateCodesDialog({
     }
   }
 
-  /** "EGP 600 collected per card" or "Free cards", from what the server stored. */
-  function collectedLabel(created: GenerateCodesResult): string | null {
-    if (created.free) return 'Free cards';
-    if (typeof created.amountCollected === 'number') {
-      return `${formatMoney(created.amountCollected)} collected per card`;
+  /** "EGP 600 per card" or "Free cards", from the price the server stored. */
+  function priceLabel(created: GenerateCodesResult): string | null {
+    if (created.priceAmount === 0) return 'Free cards';
+    if (typeof created.priceAmount === 'number') {
+      return `${formatMoney(created.priceAmount)} per card`;
     }
     return null;
   }
 
   async function downloadResult() {
     if (!result) return;
-    const collectedText = collectedLabel(result);
+    const priceText = priceLabel(result);
 
     await exportToExcel({
       filename: exportFilename(result.batchName ?? `${result.targetName}-codes`),
       sheetName: 'Codes',
       title: `${result.targetName} — access codes`,
-      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${collectedText ? ` · ${collectedText}` : ''}${expiresAt ? ` · expires ${expiresAt}` : ''
+      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${priceText ? ` · ${priceText}` : ''}${expiresAt ? ` · expires ${expiresAt}` : ''
         }`,
       columns: [
         { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
@@ -283,7 +285,7 @@ export function GenerateCodesDialog({
             </p>
             <p className="mt-1 text-xs text-success/80">
               Batch “{result.batchName ?? result.batchId.slice(0, 8)}” · {result.targetName}
-              {collectedLabel(result) ? ` · ${collectedLabel(result)}` : ''}
+              {priceLabel(result) ? ` · ${priceLabel(result)}` : ''}
             </p>
           </div>
 
@@ -470,16 +472,16 @@ export function GenerateCodesDialog({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field
-              label="Amount collected per card"
+              label="Card price"
               required={!free}
               hint={
                 free
-                  ? 'Free cards collect nothing. Redeeming one counts as an activation, not revenue.'
-                  : 'EGP the student actually paid for one card. It counts as revenue when the card is redeemed.'
+                  ? 'Free cards are priced at 0. Redeeming one counts as an activation, not revenue.'
+                  : 'What one card sells for, in whole EGP. Counted as revenue when the card is first redeemed. This is not the course catalogue price, and it does not change what the card unlocks.'
               }
               error={
-                !free && collected.trim() && amountCollected === null
-                  ? 'Enter an amount above 0 with at most 2 decimals, or mark the cards as free'
+                !free && price.trim() && cardPrice === null
+                  ? 'Enter a whole number of EGP above 0, or mark the cards as free'
                   : null
               }
             >
@@ -487,14 +489,14 @@ export function GenerateCodesDialog({
                 <TextInput
                   id={id}
                   type="number"
-                  min={0.01}
-                  step={0.01}
-                  inputMode="decimal"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
                   aria-describedby={describedBy}
                   invalid={invalid}
                   disabled={free}
-                  value={free ? '' : collected}
-                  onChange={(event) => setCollected(event.target.value)}
+                  value={free ? '' : price}
+                  onChange={(event) => setPrice(event.target.value)}
                 />
               )}
             </Field>
@@ -503,7 +505,7 @@ export function GenerateCodesDialog({
               checked={free}
               onChange={setFree}
               label="Free cards"
-              description="No money is collected for these cards."
+              description="Issued at a price of 0: no revenue when redeemed."
             />
           </div>
 

@@ -12,7 +12,7 @@ import { Drawer, Modal } from '@/components/ui/overlay';
 import { Badge, DescriptionList, PageHeader } from '@/components/ui/primitives';
 import { EmptyState, Skeleton } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
-import { collectedLabel } from '@/features/codes/amount-collected';
+import { cardPriceLabel } from '@/features/codes/card-price';
 import { GenerateCodesDialog } from '@/features/codes/generate-codes-dialog';
 import { useCodeRedemptions, useCodes, useRevokeCode } from '@/features/codes/hooks';
 import { fetchAllPages } from '@/lib/api-client';
@@ -23,7 +23,7 @@ import {
   exportFilename,
   type ExportColumn,
 } from '@/lib/export-excel';
-import { formatDateTime, formatMoney, formatPhone, maskCode } from '@/lib/format';
+import { formatDateTime, formatPhone, maskCode } from '@/lib/format';
 import { useListQuery } from '@/lib/use-list-query';
 import {
   CODE_STATUSES,
@@ -95,16 +95,14 @@ export function CodeList() {
       ),
     },
     {
-      key: 'amountCollected',
-      header: 'Collected',
+      // The issued price — what revenue counts on first redemption — not the
+      // course's catalogue price.
+      key: 'amount',
+      header: 'Card price',
       align: 'end',
       render: (code) => (
-        <span
-          className={
-            code.amountCollected ? 'tabular-nums' : 'tabular-nums text-muted'
-          }
-        >
-          {collectedLabel(code.amountCollected, code.currency)}
+        <span className={code.amount ? 'tabular-nums' : 'tabular-nums text-muted'}>
+          {cardPriceLabel(code.amount, code.currency)}
         </span>
       ),
     },
@@ -163,14 +161,7 @@ export function CodeList() {
     { header: 'Target', key: 'target', width: 34, value: (row) => row.targetName },
     { header: 'Batch', key: 'batch', width: 24, value: (row) => row.batchName ?? '' },
     {
-      // Blank when never recorded, 0 when free — the two are not the same.
-      header: 'Collected per card',
-      key: 'amountCollected',
-      width: 16,
-      value: (row) => row.amountCollected ?? null,
-      format: EXCEL_MONEY_FORMAT,
-    },
-    {
+      // Blank when issued without a price, 0 when free — not the same thing.
       header: 'Card price',
       key: 'amount',
       width: 12,
@@ -360,12 +351,8 @@ function CodeDrawer({ code, onClose }: { code: CodeRow | null; onClose: () => vo
                 ? [{ label: 'Part', value: code.coursePart.title }]
                 : []),
               {
-                label: 'Collected per card',
-                value: collectedLabel(code.amountCollected, code.currency),
-              },
-              {
                 label: 'Card price',
-                value: code.amount === null ? '—' : formatMoney(code.amount, code.currency),
+                value: cardPriceLabel(code.amount, code.currency),
               },
               { label: 'Uses', value: `${code.redemptionCount} of ${code.maxRedemptions}` },
               {

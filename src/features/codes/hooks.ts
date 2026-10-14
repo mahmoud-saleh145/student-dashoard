@@ -39,9 +39,8 @@ export interface BatchCodesResponse {
     id: string;
     code: string;
     status: string;
+    /** The card's issued price: 0 is free, null was issued without one. */
     amount: number | null;
-    /** Collected per card: 0 is free, null was never recorded (older cards). */
-    amountCollected?: number | null;
     currency: string;
     redemptionCount: number;
     maxRedemptions: number;
@@ -80,13 +79,12 @@ export interface GenerateCodesInput {
   coursePartId?: string;
   batchName?: string;
   count: number;
-  priceAmount?: number;
   /**
-   * EGP collected per card. Exactly one of this or `free: true` — the backend
-   * refuses neither and both, so no card is issued without a recorded amount.
+   * The price of one card, in whole EGP; 0 for free cards. It is the revenue
+   * figure when a card is first redeemed and never affects what it unlocks.
+   * Optional to the API, but the dialog always sends it.
    */
-  amountCollected?: number;
-  free?: true;
+  priceAmount?: number;
   expiresAt?: string;
   prefix?: string;
 }
@@ -98,9 +96,8 @@ export interface GenerateCodesResult {
   targetName: string;
   requested: number;
   created: number;
-  /** What the server stored per card (0 when free). */
-  amountCollected?: number;
-  free?: boolean;
+  /** The price the server stored per card (0 when free); absent from older APIs. */
+  priceAmount?: number | null;
   /** The plaintext codes, returned once and only at creation. */
   codes: string[];
 }
