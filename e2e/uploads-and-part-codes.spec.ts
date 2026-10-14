@@ -226,6 +226,7 @@ test.describe('PART access cards', () => {
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('Part').selectOption('part-1');
     await dialog.getByLabel('How many cards').fill('10');
+    await dialog.getByLabel('Amount collected per card').fill('600');
     // Wait for the request to land before asking the stub what it received —
     // reading straight after the click raced the browser and flaked.
     await Promise.all([
@@ -241,6 +242,8 @@ test.describe('PART access cards', () => {
     expect(sent.data.coursePartId).toBe('part-1');
     expect(sent.data.courseId).toBe('course-1');
     expect(sent.data.count).toBe(10);
+    expect(sent.data.amountCollected).toBe(600);
+    expect(sent.data.free).toBeUndefined();
   });
 
   test('still generates a whole-course card the old way', async ({ page, signIn }) => {
@@ -249,6 +252,7 @@ test.describe('PART access cards', () => {
 
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('How many cards').fill('5');
+    await dialog.getByLabel('Amount collected per card').fill('450.50');
     // Wait for the request to land before asking the stub what it received —
     // reading straight after the click raced the browser and flaked.
     await Promise.all([
@@ -264,6 +268,7 @@ test.describe('PART access cards', () => {
     expect(sent.data.courseId).toBe('course-1');
     // The part must not leak into a target that has nothing to do with it.
     expect(sent.data.coursePartId).toBeUndefined();
+    expect(sent.data.amountCollected).toBe(450.5);
   });
 
   test('still generates a section card', async ({ page, signIn }) => {
@@ -273,6 +278,7 @@ test.describe('PART access cards', () => {
     await dialog.getByLabel('What do these cards unlock?').selectOption('SECTION');
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('Section').selectOption('sec-1');
+    await dialog.getByRole('switch', { name: 'Free cards' }).click();
     // Wait for the request to land before asking the stub what it received —
     // reading straight after the click raced the browser and flaked.
     await Promise.all([
@@ -287,6 +293,8 @@ test.describe('PART access cards', () => {
     expect(sent.data.targetType).toBe('SECTION');
     expect(sent.data.sectionId).toBe('sec-1');
     expect(sent.data.coursePartId).toBeUndefined();
+    expect(sent.data.free).toBe(true);
+    expect(sent.data.amountCollected).toBeUndefined();
   });
 
   test('shows PART as a readable label rather than a raw enum', async ({ page, signIn }) => {

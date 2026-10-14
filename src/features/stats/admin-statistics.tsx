@@ -21,15 +21,25 @@ import { CardsSkeleton, ErrorState, Skeleton } from '@/components/ui/states';
 import { api } from '@/lib/api-client';
 import { endOfDayIso, formatDate, formatMoney, formatNumber, startOfDayIso } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
+import { cn } from '@/lib/utils';
 import type { DashboardStats, RevenuePoint } from '@/types/domain';
 
 /**
  * The Statistics screen.
  *
  * Every figure here comes from `GET /analytics/dashboard` and
- * `GET /analytics/revenue`, both of which read the immutable revenue ledger
- * rather than any course's current price. Nothing on this page is computed in
- * the browser from a sample, and nothing is placeholder data.
+ * `GET /analytics/revenue`. Nothing on this page is computed in the browser
+ * from a sample, and nothing is placeholder data.
+ *
+ * Revenue is money actually collected, from three sources, each counted once:
+ * paid access cards (the amount recorded when the card was issued, counted
+ * when it is first redeemed), wallet top-ups (cash paid for recharge cards),
+ * and online payments net of refunds. Profit equals revenue — no expenses are
+ * recorded. Free cards and cards whose amount was never recorded are shown as
+ * activations beside it, never valued from a course or card price.
+ *
+ * Every new revenue field is optional in the type: against an API deployed
+ * before them, the tiles fall back to the ledger figures they showed before.
  */
 
 function defaultRange() {
@@ -59,12 +69,13 @@ export function AdminStatistics() {
 
   const data = stats.data;
   const currency = data?.revenue.currency ?? 'EGP';
+  const money = (amount: number | undefined) => formatMoney(amount ?? 0, currency);
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Statistics"
-        description="Platform activity, course catalogue and revenue. Money figures come from the revenue ledger, so they never change when a course is repriced."
+        description="Platform activity, course catalogue and revenue. Revenue is money actually collected — paid cards when redeemed, wallet top-ups and online payments — never a course's listed price."
         actions={
           <DateRangeFilter
             from={range.from}
@@ -103,45 +114,104 @@ export function AdminStatistics() {
             />
             <StatTile
               label="Total revenue"
-              value={formatMoney(data.revenue.netAllTime, currency)}
+              value={money(data.revenue.totalAllTime ?? data.revenue.netAllTime)}
               hint={
-                data.revenue.refundedAllTime > 0
-                  ? `after ${formatMoney(data.revenue.refundedAllTime, currency)} refunded`
-                  : 'all time, net of refunds'
+                data.revenue.totalAllTime === undefined
+                  ? 'all time, net of refunds'
+                  : sourcesHint(
+                      data.revenue.codeSalesAllTime,
+                      data.revenue.walletTopUpsAllTime,
+                      data.revenue.onlinePaymentsAllTime,
+                      money,
+                    )
               }
               tone="success"
             />
           </section>
 
           <section
+            aria-label="Revenue in period"
+            className={cn(
+              'grid grid-cols-1 gap-4 sm:grid-cols-2',
+              showOnline(data) ? 'xl:grid-cols-5' : 'xl:grid-cols-4',
+            )}
+          >
+            <StatTile
+              label="Revenue in period"
+              value={money(
+                data.revenue.totalInPeriod ??
+                  data.revenue.netInPeriod ??
+                  data.revenue.grossInPeriod,
+              )}
+              hint={`${formatDate(data.period.from)} – ${formatDate(data.period.to)}`}
+              tone="success"
+            />
+            <StatTile
+              label="Code sales"
+              value={money(data.revenue.codeSalesInPeriod)}
+              hint={countHint(data.purchases.paidCodeSalesInPeriod, 'paid card redeemed', 'paid cards redeemed')}
+            />
+            <StatTile
+              label="Wallet top-ups"
+              value={money(data.revenue.walletTopUpsInPeriod)}
+              hint={countHint(data.revenue.walletTopUpCountInPeriod, 'recharge card redeemed', 'recharge cards redeemed')}
+            />
+            {showOnline(data) ? (
+              // Net of completed refunds; pending refunds are not deducted
+              // until they are completed.
+              <StatTile
+                label="Online payments"
+                value={money(data.revenue.onlinePaymentsInPeriod ?? data.revenue.netInPeriod)}
+                hint={
+                  data.revenue.refundedInPeriod
+                    ? `${money(data.revenue.grossInPeriod)} sales − ${money(data.revenue.refundedInPeriod)} refunded`
+                    : `${formatNumber(data.purchases.transactionsInPeriod)} transactions`
+                }
+              />
+            ) : null}
+            <StatTile
+              label="Profit"
+              value={money(
+                data.revenue.profitInPeriod ??
+                  data.revenue.totalInPeriod ??
+                  data.revenue.netInPeriod ??
+                  data.revenue.grossInPeriod,
+              )}
+              hint="equal to revenue — no expenses are recorded"
+              tone="success"
+            />
+          </section>
+
+          <section
             aria-label="Purchases and access"
-            className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4"
+            className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5"
           >
             <StatTile
               label="Paid purchases"
-              value={formatNumber(data.purchases.paidPayments)}
-              hint="payments captured, all time"
+              value={formatNumber(
+                data.purchases.paidCodeSalesInPeriod ?? data.purchases.paidPayments,
+              )}
+              hint={
+                data.purchases.paidCodeSalesAllTime === undefined
+                  ? 'payments captured, all time'
+                  : `paid cards redeemed in period · ${formatNumber(data.purchases.paidCodeSalesAllTime)} all time`
+              }
+            />
+            <StatTile
+              label="Free activations"
+              value={formatNumber(data.activations?.freeInPeriod ?? 0)}
+              hint={`free cards redeemed · ${formatNumber(data.activations?.freeAllTime ?? 0)} all time · not revenue`}
+            />
+            <StatTile
+              label="Amount not recorded"
+              value={formatNumber(data.activations?.unrecordedInPeriod ?? 0)}
+              hint={`older cards redeemed with no amount on record · ${formatNumber(data.activations?.unrecordedAllTime ?? 0)} all time · not in revenue`}
+              tone={(data.activations?.unrecordedInPeriod ?? 0) > 0 ? 'warning' : 'neutral'}
             />
             <StatTile
               label="Active enrolments"
               value={formatNumber(data.purchases.activeEnrollments)}
               hint="students with live access"
-            />
-            {/* Net of completed refunds, like "Total revenue" above — it used
-                to show gross, so a refund never moved this figure. Pending
-                refunds are not deducted until they are completed. */}
-            <StatTile
-              label="Revenue in period"
-              value={formatMoney(
-                data.revenue.netInPeriod ?? data.revenue.grossInPeriod,
-                currency,
-              )}
-              hint={
-                data.revenue.refundedInPeriod
-                  ? `${formatMoney(data.revenue.grossInPeriod, currency)} sales − ${formatMoney(data.revenue.refundedInPeriod, currency)} refunded`
-                  : `${formatNumber(data.purchases.transactionsInPeriod)} transactions`
-              }
-              tone="success"
             />
             <StatTile
               label="New enrolments in period"
@@ -154,7 +224,7 @@ export function AdminStatistics() {
             <Card className="xl:col-span-2">
               <CardHeader
                 title="Revenue"
-                description="Daily gross, from the revenue ledger."
+                description="Money collected each day: code sales, wallet top-ups and online payments."
               />
               <CardBody>
                 {revenue.isLoading ? (
@@ -208,25 +278,83 @@ export function AdminStatistics() {
   );
 }
 
-interface RevenueSeriesResponse {
-  points?: { day: string; amount: number; transactions?: number }[];
-  series?: { day: string; amount: number }[];
-  items?: { day: string; amount: number }[];
+/** "Codes EGP 1,200 · Wallet top-ups EGP 300", plus online payments when there are any. */
+function sourcesHint(
+  codeSales: number | undefined,
+  walletTopUps: number | undefined,
+  online: number | undefined,
+  money: (amount: number | undefined) => string,
+): string {
+  const parts = [`Codes ${money(codeSales)}`, `Wallet top-ups ${money(walletTopUps)}`];
+  if (online) parts.push(`Online ${money(online)}`);
+  return parts.join(' · ');
+}
+
+function countHint(count: number | undefined, one: string, many: string): string | undefined {
+  if (count === undefined) return undefined;
+  return `${formatNumber(count)} ${count === 1 ? one : many}`;
 }
 
 /**
- * The revenue endpoint predates this dashboard and returns its rows under one
- * of a few keys depending on the shape it was built for. Reading all of them
- * is cheaper and safer than changing an endpoint the mobile app also uses.
+ * The online channel is switched off in production, so its tile is shown only
+ * once it has ever recorded something — an always-zero tile would only invite
+ * the question of where the money went.
+ */
+function showOnline(data: DashboardStats): boolean {
+  return (
+    data.revenue.grossAllTime > 0 ||
+    data.revenue.refundedAllTime > 0 ||
+    Boolean(data.revenue.onlinePaymentsAllTime)
+  );
+}
+
+interface SeriesRow {
+  day: string;
+  total?: number;
+  codeSales?: number;
+  walletTopUps?: number;
+  net?: number;
+  amount?: number;
+}
+
+type RevenueSeriesResponse =
+  | SeriesRow[]
+  | { points?: SeriesRow[]; series?: SeriesRow[]; items?: SeriesRow[] };
+
+/**
+ * `GET /analytics/revenue` returns a bare array of days. This screen used to
+ * read it as `{ points }`, which a bare array never has, so the chart always
+ * said "No revenue recorded" whatever the ledger held. The array is read
+ * first; the keyed shapes are still accepted.
  */
 function normalizeSeries(response: RevenueSeriesResponse | undefined): RevenuePoint[] {
-  const rows = response?.points ?? response?.series ?? response?.items ?? [];
-  return rows.map((row) => ({
-    day: row.day,
-    amount: Number(row.amount) || 0,
-    transactions: 'transactions' in row ? Number(row.transactions) || 0 : undefined,
-  }));
+  const rows = Array.isArray(response)
+    ? response
+    : (response?.points ?? response?.series ?? response?.items ?? []);
+  const num = (value: unknown) => Number(value) || 0;
+
+  return rows.map((row) => {
+    const codeSales = num(row.codeSales);
+    const walletTopUps = num(row.walletTopUps);
+    const online = num(row.net ?? row.amount);
+    return {
+      day: row.day,
+      codeSales,
+      walletTopUps,
+      online,
+      total:
+        row.total !== undefined
+          ? num(row.total)
+          : Math.round((codeSales + walletTopUps + online) * 100) / 100,
+    };
+  });
 }
+
+const SERIES = [
+  { key: 'codeSales', name: 'Code sales', color: 'var(--color-primary)' },
+  { key: 'walletTopUps', name: 'Wallet top-ups', color: 'var(--color-info)' },
+  { key: 'online', name: 'Online payments', color: 'var(--color-success)' },
+] as const;
 
 function RevenueChart({ points, currency }: { points: RevenuePoint[]; currency: string }) {
   if (points.length === 0) {
@@ -237,17 +365,14 @@ function RevenueChart({ points, currency }: { points: RevenuePoint[]; currency: 
     );
   }
 
+  // Only the sources that have money in this range; online payments are off
+  // in production and would otherwise add an empty legend entry.
+  const shown = SERIES.filter((s) => points.some((p) => p[s.key] !== 0));
+
   return (
     <div className="h-64 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={points} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-          <defs>
-            <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--color-primary)" stopOpacity={0.28} />
-              <stop offset="100%" stopColor="var(--color-primary)" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
-
           <CartesianGrid stroke="var(--color-border)" vertical={false} />
           <XAxis
             dataKey="day"
@@ -273,15 +398,21 @@ function RevenueChart({ points, currency }: { points: RevenuePoint[]; currency: 
               color: 'var(--color-foreground)',
             }}
             labelFormatter={(value) => formatDate(String(value ?? ''))}
-            formatter={(value) => [formatMoney(Number(value ?? 0), currency), 'Revenue']}
+            formatter={(value, name) => [formatMoney(Number(value ?? 0), currency), String(name)]}
           />
-          <Area
-            type="monotone"
-            dataKey="amount"
-            stroke="var(--color-primary)"
-            strokeWidth={2}
-            fill="url(#revenueFill)"
-          />
+          {shown.map((s) => (
+            <Area
+              key={s.key}
+              type="monotone"
+              dataKey={s.key}
+              name={s.name}
+              stackId="revenue"
+              stroke={s.color}
+              strokeWidth={2}
+              fill={s.color}
+              fillOpacity={0.15}
+            />
+          ))}
         </AreaChart>
       </ResponsiveContainer>
     </div>

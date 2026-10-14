@@ -251,8 +251,14 @@ test('Statistics shows revenue in the period net of completed refunds', async ({
   await signIn('admin');
   await expect(page.getByRole('heading', { name: 'Statistics' })).toBeVisible();
 
-  // The stub's period: 7,500 of sales and 300 of completed refunds.
-  const tile = page.getByText('Revenue in period').locator('..');
-  await expect(tile).toContainText('7,200');
-  await expect(tile).toContainText(/7,500.*sales.*300.*refunded/);
+  // The stub's period: 7,500 of online sales and 300 of completed refunds.
+  // Refunds live in the online-payment ledger, so that is the tile they move.
+  const online = page.getByText('Online payments', { exact: true }).locator('..');
+  await expect(online).toContainText('7,200');
+  await expect(online).toContainText(/7,500.*sales.*300.*refunded/);
+
+  // And the period's revenue counts the net, never the gross:
+  // 4,200 code sales + 1,000 wallet top-ups + 7,200 online = 12,400.
+  const revenue = page.getByText('Revenue in period', { exact: true }).locator('..');
+  await expect(revenue).toContainText('12,400');
 });
