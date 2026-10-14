@@ -1,4 +1,4 @@
-import { ACCOUNTS, expect, resetStub, test } from './fixtures';
+import { ACCOUNTS, expect, resetStub, stubRequests, test } from './fixtures';
 
 /**
  * Authentication.
@@ -63,6 +63,29 @@ test.describe('sign in', () => {
 
     await expect(page.getByText(/valid Egyptian mobile/i)).toBeVisible();
     expect(requested).toBe(false);
+  });
+
+  test('a locked account says how long is left, in English and Arabic, and is not retried', async ({
+    page,
+  }) => {
+    // The stub answers this number as the production API answers a locked
+    // account: 429, no `details`, `Retry-After: 540`.
+    await page.goto('/login');
+    await page.getByLabel('Phone number').fill('01000000006');
+    await page.getByLabel('Password').fill('any-password');
+    await page.getByRole('button', { name: 'Sign in' }).click();
+
+    const alert = page.locator('form').getByRole('alert');
+    await expect(alert).toContainText(/temporarily locked/i);
+    await expect(alert).toContainText(/about 9 minutes/i);
+    await expect(alert.locator('[lang="ar"]')).toContainText('تم قفل هذا الحساب مؤقتًا');
+    await expect(alert.locator('[lang="ar"]')).toContainText('9 دقائق');
+    await expect(page).toHaveURL(/\/login/);
+
+    // One click, one attempt — nothing retried behind the person's back.
+    await page.waitForTimeout(3_000);
+    const attempts = (await stubRequests(page)).filter((r) => r === 'POST /auth/login');
+    expect(attempts).toHaveLength(1);
   });
 });
 

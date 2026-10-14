@@ -16,6 +16,7 @@ import type {
   ContentStatus,
   CourseStatus,
   EnrollmentState,
+  RefundStatus,
   SupportPriority,
   SupportStatus,
   VideoStatus,
@@ -250,4 +251,21 @@ export function CodeTargetBadge({ targetType }: { targetType: CodeTargetType }) 
       {CODE_TARGET_TYPE_LABEL[targetType]}
     </Badge>
   );
+}
+
+/**
+ * A payment's refund state, shown BESIDE the payment — never instead of its
+ * status. "Refund pending" means a request awaits completion and nothing of it
+ * has been refunded yet; the payment itself is still paid. Renders nothing
+ * when there is no refund (or the API predates refund status).
+ */
+export function RefundStatusBadge({ status }: { status: RefundStatus | undefined }) {
+  if (!status || status === 'NONE') return null;
+  const [tone, label]: [BadgeTone, string] =
+    status === 'PENDING'
+      ? ['warning', 'Refund pending']
+      : status === 'PARTIALLY_REFUNDED'
+        ? ['info', 'Partly refunded']
+        : ['neutral', 'Refunded'];
+  return <Badge tone={tone}>{label}</Badge>;
 }

@@ -124,6 +124,202 @@ export function useCourseStudents(courseId: string, query: Record<string, string
   });
 }
 
+/** What `POST /admin/enrollments/:id/revoke` reports back. */
+export interface RemoveStudentResult {
+  ok: true;
+  enrollmentId: string;
+  userId: string;
+  courseId: string;
+  state: 'REVOKED';
+  /** True when the student had already been removed; nothing changed. */
+  alreadyRemoved: boolean;
+  /** Unpaid (PENDING) payments on this enrollment that were cancelled. */
+  cancelledPayments: number;
+  revokedPartEntitlements: number;
+  removedSectionGrants: number;
+  revokedPlaybackTickets: number;
+  /** Records deliberately kept: paid payments (no refund) and code redemptions. */
+  retained: { paidPayments: number; codeRedemptions: number };
+}
+
+/**
+ * Removes one student from one course. Administrators only; the backend
+ * enforces that and scopes the change to this enrollment of this course.
+ *
+ * Revenue, paid payments, code redemptions and watch history are kept; nothing
+ * is refunded. Everything that shows enrollment state or counts is refreshed:
+ * this course's student list and header count, the Students screen, and the
+ * Statistics totals.
+ */
+export function useRemoveStudentFromCourse(courseId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ enrollmentId, reason }: { enrollmentId: string; reason: string }) =>
+      api.post<RemoveStudentResult>(`admin/enrollments/${enrollmentId}/revoke`, {
+        reason,
+        // Lets the API refuse an enrollment that is not in this course.
+        courseId,
+      }),
+    onSettled: async () => {
+      // On failure too: a 404 or 409 means this list was stale, and the
+      // reader should see the real state rather than the row they clicked.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.courses.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.students.all }),
+        queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      ]);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Refunds
+// ---------------------------------------------------------------------------
+
+/**
+ * How a completed refund was recorded. The platform never transfers money, so
+ * today every completion is an administrator's confirmation:
+ *   ADMIN_CONFIRMED_MANUAL   — manual (offline) payment, returned by the admin
+ *   ADMIN_CONFIRMED_EXTERNAL — Paymob/Stripe payment, refunded outside the
+ *                              platform (e.g. in the provider's dashboard)
+ *   PROVIDER_CONFIRMED       — reserved for a verified provider integration
+ *   UNRECORDED               — written by the old refund before this existed
+ */
+export type CompletionMethod =
+  | 'ADMIN_CONFIRMED_MANUAL'
+  | 'ADMIN_CONFIRMED_EXTERNAL'
+  | 'PROVIDER_CONFIRMED'
+  | 'UNRECORDED';
+
+export interface RefundView {
+  id: string;
+  amount: number;
+  currency: string;
+  /**
+   * SUCCEEDED: completed — counted as refunded and deducted from net revenue.
+   * PENDING:   reserved against the balance, not refunded money yet.
+   * FAILED:    will not happen; the reservation was released.
+   */
+  status: 'SUCCEEDED' | 'PENDING' | 'FAILED';
+  completionMethod: CompletionMethod | null;
+  /** External reference recorded with the completion, if any. */
+  reference: string | null;
+  reason: string | null;
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+/** `GET /admin/payments/:id/refunds` — read fresh for the Refund dialog. */
+export interface RefundSummary {
+  payment: {
+    id: string;
+    status: string;
+    provider: string;
+    /** Always false today: no Paymob/Stripe refund API is integrated. */
+    providerRefundIntegrated: boolean;
+    amount: number;
+    currency: string;
+    paidAt: string | null;
+    refundedAmount: number;
+    pendingRefundAmount: number;
+    refundableAmount: number;
+    /** Exact decimal string of `refundableAmount`, e.g. "179.50". */
+    refundableAmountText: string;
+    eligible: boolean;
+  };
+  student: { id: string; fullName: string; phone: string };
+  course: { id: string; title: string };
+  enrollment: { id: string; state: string } | null;
+  refunds: RefundView[];
+}
+
+export interface RefundResult {
+  refund: RefundView;
+  /** Always false: the platform records refunds, it does not send money. */
+  platformTransferredMoney: false;
+  access: {
+    enrollmentId: string;
+    revoked: true;
+    alreadyRevoked: boolean;
+    cancelledPayments: number;
+  } | null;
+  summary: RefundSummary;
+  replayed: boolean;
+}
+
+const refundKey = (paymentId: string) => ['refunds', paymentId] as const;
+
+export function useRefundSummary(paymentId: string | null) {
+  return useQuery({
+    queryKey: refundKey(paymentId ?? 'none'),
+    queryFn: () => api.get<RefundSummary>(`admin/payments/${paymentId}/refunds`),
+    enabled: Boolean(paymentId),
+    // A refund dialog must never act on a stale balance.
+    staleTime: 0,
+  });
+}
+
+/**
+ * Refund mutations. On success and on failure alike, every view that shows
+ * this money or this access is refreshed: the dialog's own summary, the
+ * course's students and counts, the Students screen, and Statistics (whose
+ * revenue is net of refunds).
+ */
+function useRefundMutation<TInput, TResult>(
+  paymentId: string | null,
+  perform: (input: TInput) => Promise<TResult>,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: perform,
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: refundKey(paymentId ?? 'none') }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.courses.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.students.all }),
+        queryClient.invalidateQueries({ queryKey: ['stats'] }),
+      ]);
+    },
+  });
+}
+
+export function useRefundPayment(paymentId: string | null) {
+  return useRefundMutation(
+    paymentId,
+    (input: {
+      type: 'FULL' | 'PARTIAL';
+      amount?: string;
+      reason?: string;
+      idempotencyKey: string;
+      /** IMMEDIATE (default on the server) or PENDING. */
+      completion: 'IMMEDIATE' | 'PENDING';
+      /** Sent as true only from the final confirmation of an immediate refund. */
+      confirmMoneyReturned?: boolean;
+    }) => api.post<RefundResult>(`admin/payments/${paymentId}/refund`, input),
+  );
+}
+
+export function useResolveRefund(paymentId: string | null) {
+  return useRefundMutation(
+    paymentId,
+    (
+      input:
+        | { refundId: string; outcome: 'complete'; confirmMoneyReturned: true; reference?: string }
+        | { refundId: string; outcome: 'fail'; reason: string },
+    ) =>
+      api.post<{ refund: RefundView; summary: RefundSummary; replayed: boolean }>(
+        `admin/payments/${paymentId}/refunds/${input.refundId}/${input.outcome}`,
+        input.outcome === 'complete'
+          ? {
+              confirmMoneyReturned: input.confirmMoneyReturned,
+              ...(input.reference ? { reference: input.reference } : {}),
+            }
+          : { reason: input.reason },
+      ),
+  );
+}
+
 export function useCoursePriceHistory(courseId: string, enabled: boolean) {
   return useQuery({
     queryKey: queryKeys.courses.priceHistory(courseId),
@@ -168,7 +364,11 @@ export function useSectionAttachments(sectionId: string | null) {
   });
 }
 
-/** Invalidates whichever attachment list the row belonged to. */
+/**
+ * Invalidates whichever attachment list the row belonged to, and the lecture
+ * list, whose per-lecture document count changes when a document is added or
+ * removed.
+ */
 function useAttachmentMutation<TInput>(perform: (input: TInput) => Promise<unknown>) {
   const queryClient = useQueryClient();
 
@@ -178,6 +378,7 @@ function useAttachmentMutation<TInput>(perform: (input: TInput) => Promise<unkno
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['lessons', 'attachments'] }),
         queryClient.invalidateQueries({ queryKey: ['sections', 'attachments'] }),
+        queryClient.invalidateQueries({ queryKey: ['courses', 'sections'] }),
       ]);
     },
   });

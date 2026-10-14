@@ -56,6 +56,11 @@ function kindFor(mimeType: string): AttachmentKind {
   return 'OTHER';
 }
 
+/** The Free Sample state in words, so it never depends on reading the switch. */
+function freeSampleLabel(on: boolean): string {
+  return `Free Sample: ${on ? 'ON' : 'OFF'}`;
+}
+
 export type AttachmentScope =
   | { kind: 'lesson'; lessonId: string }
   | { kind: 'section'; sectionId: string };
@@ -182,7 +187,6 @@ export function AttachmentsPanel({
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted">
                   <Badge tone="neutral">{row.kind}</Badge>
                   {row.sizeBytes === null ? null : <span>{formatBytes(row.sizeBytes)}</span>}
-                  {row.isPreview ? <Badge tone="info">Free sample</Badge> : null}
                   {row.isProtected ? (
                     <Badge tone="success">Protected</Badge>
                   ) : row.isDownloadable ? (
@@ -191,18 +195,29 @@ export function AttachmentsPanel({
                 </div>
               </div>
 
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label={`${row.isPreview ? 'Require access for' : 'Make a free sample of'} ${row.title}`}
-                onClick={() => {
-                  void update
-                    .mutateAsync({ id: row.id, isPreview: !row.isPreview })
-                    .catch((error: unknown) => toast.error(error));
-                }}
-              >
-                {row.isPreview ? 'Require access' : 'Free sample'}
-              </Button>
+              {/* The switch shows the SAVED value and changes only when the
+                  API confirms. It used to read a field the API never sent,
+                  so every row looked "off" and toggling always sent `true`. */}
+              <div className="shrink-0" data-testid={`free-sample-${row.id}`}>
+                <Switch
+                  checked={row.isPreview === true}
+                  disabled={update.isPending && update.variables?.id === row.id}
+                  label={freeSampleLabel(row.isPreview === true)}
+                  onChange={(next) => {
+                    void update
+                      .mutateAsync({ id: row.id, isPreview: next })
+                      .then(() =>
+                        toast.success(
+                          next ? 'Free sample turned on' : 'Free sample turned off',
+                          next
+                            ? `“${row.title}” can be opened without owning the course.`
+                            : `“${row.title}” now requires access.`,
+                        ),
+                      )
+                      .catch((error: unknown) => toast.error(error));
+                  }}
+                />
+              </div>
 
               <Button
                 size="sm"
@@ -249,11 +264,11 @@ export function AttachmentsPanel({
         <Switch
           checked={isPreview}
           onChange={setIsPreview}
-          label="Free sample"
+          label={freeSampleLabel(isPreview)}
           description={
             isPreview
               ? 'Readable without owning the course or this part.'
-              : `Only students who own this ${scope.kind === 'section' ? 'section’s part' : 'course or its part'} can open it.`
+              : `Off by default. Only students who own this ${scope.kind === 'section' ? 'section’s part' : 'course or its part'} can open it.`
           }
         />
 

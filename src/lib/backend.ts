@@ -121,7 +121,7 @@ export async function backendRequest<T>(request: BackendRequest): Promise<Backen
   const parsed: unknown = text ? safeJson(text) : null;
 
   if (!response.ok) {
-    throw toApiError(parsed, response.status);
+    throw toApiError(parsed, response.status, response.headers.get('retry-after'));
   }
 
   // Success bodies are `{ success, data, meta }`. A handler that opted out of
