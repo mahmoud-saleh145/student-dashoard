@@ -77,13 +77,18 @@ function courseOptionLabel(course: CourseSummary): string {
  * **None of these touch the wallet.** A card is bought offline and redeemed
  * here; wallet credit buys library material and nothing else.
  *
- * **Every card is issued at a price** — what one card is sold for, or "Free".
- * That price (`priceAmount`) is what revenue reporting counts when the card is
- * first redeemed; an unused card is never revenue, and a free card's
- * redemption is an activation. It is not the course's catalogue price, and it
- * never decides whether the card unlocks anything. There is no default: cards
- * issued without a price are what left earlier sales unreportable, so the
- * dialog will not generate until a price or "Free" is chosen.
+ * **The card price is optional.** It is what one card sells for — the figure
+ * revenue reporting counts when the card is first redeemed — and nothing else:
+ * an unused card is never revenue, a free card's redemption is an activation
+ * counted separately, and a card issued without a price is reported as "Not
+ * recorded" rather than valued at the course's catalogue price.
+ *
+ * Leaving it blank is a deliberate third choice, not an unfinished form. The
+ * price is reporting metadata; the card unlocks exactly what it was issued to
+ * unlock whatever it was priced at, including not at all. The blank case is
+ * therefore kept distinct from "Free cards" rather than folded into it: a free
+ * card is a known zero that is worth reporting as such, while an unpriced one
+ * is a sale whose amount nobody recorded.
  */
 
 /** A whole EGP price above 0, within the API's ceiling (the API takes integers). */
@@ -158,8 +163,12 @@ export function GenerateCodesDialog({
           ? Boolean(coursePartId)
           : Boolean(courseId);
 
-  const cardPrice = parsePrice(price);
-  const priceValid = free || cardPrice !== null;
+  // Blank is a real answer — "no price was recorded" — so it is not held
+  // against the form the way a malformed price is. Only text that is present
+  // and wrong blocks generation.
+  const priceBlank = price.trim() === '';
+  const cardPrice = priceBlank ? null : parsePrice(price);
+  const priceValid = free || priceBlank || cardPrice !== null;
 
   const canSubmit = quantityValid && targetChosen && priceValid && !generate.isPending;
 
@@ -187,7 +196,9 @@ export function GenerateCodesDialog({
         teacherId: targetType === 'TEACHER' ? teacherId : undefined,
         batchName: batchName.trim() || undefined,
         count: quantity,
-        // Free cards are priced at 0, not left unpriced.
+        // Free cards are priced at 0; a blank price is sent as no price at all
+        // (the key is omitted), which the server stores as null. Neither is
+        // ever turned into the other, and no catalogue price is substituted.
         priceAmount: free ? 0 : (cardPrice ?? undefined),
         prefix: prefix.trim() || undefined,
         expiresAt: expiresAt ? new Date(`${expiresAt}T23:59:59`).toISOString() : undefined,
@@ -203,13 +214,18 @@ export function GenerateCodesDialog({
     }
   }
 
-  /** "EGP 600 per card" or "Free cards", from the price the server stored. */
-  function priceLabel(created: GenerateCodesResult): string | null {
+  /**
+   * "EGP 600 per card", "Free cards" or "Not recorded" — from the price the
+   * server actually stored, so the result screen says the same thing as the
+   * code and batch lists will. An unpriced batch is named rather than left
+   * silent: a blank price is a decision, and it reads as one.
+   */
+  function priceLabel(created: GenerateCodesResult): string {
     if (created.priceAmount === 0) return 'Free cards';
     if (typeof created.priceAmount === 'number') {
       return `${formatMoney(created.priceAmount)} per card`;
     }
-    return null;
+    return 'Not recorded';
   }
 
   async function downloadResult() {
@@ -220,7 +236,7 @@ export function GenerateCodesDialog({
       filename: exportFilename(result.batchName ?? `${result.targetName}-codes`),
       sheetName: 'Codes',
       title: `${result.targetName} — access codes`,
-      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope${priceText ? ` · ${priceText}` : ''}${expiresAt ? ` · expires ${expiresAt}` : ''
+      subtitle: `${result.created} cards · ${result.targetType.toLowerCase()} scope · ${priceText}${expiresAt ? ` · expires ${expiresAt}` : ''
         }`,
       columns: [
         { header: 'Code', key: 'code', width: 24, value: (row) => row.code },
@@ -284,8 +300,8 @@ export function GenerateCodesDialog({
               {result.created} of {result.requested} cards created
             </p>
             <p className="mt-1 text-xs text-success/80">
-              Batch “{result.batchName ?? result.batchId.slice(0, 8)}” · {result.targetName}
-              {priceLabel(result) ? ` · ${priceLabel(result)}` : ''}
+              Batch “{result.batchName ?? result.batchId.slice(0, 8)}” · {result.targetName} ·{' '}
+              {priceLabel(result)}
             </p>
           </div>
 
@@ -472,16 +488,15 @@ export function GenerateCodesDialog({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field
-              label="Card price"
-              required={!free}
+              label="Card price (optional)"
               hint={
                 free
                   ? 'Free cards are priced at 0. Redeeming one counts as an activation, not revenue.'
-                  : 'What one card sells for, in whole EGP. Counted as revenue when the card is first redeemed. This is not the course catalogue price, and it does not change what the card unlocks.'
+                  : 'What one card sells for, in whole EGP. Counted as revenue when the card is first redeemed. Leave it blank if the amount was never recorded — the cards still unlock exactly what they were issued to unlock. This is not the course catalogue price, and it does not change what the card unlocks.'
               }
               error={
-                !free && price.trim() && cardPrice === null
-                  ? 'Enter a whole number of EGP above 0, or mark the cards as free'
+                !free && !priceBlank && cardPrice === null
+                  ? 'Enter a whole number of EGP above 0, or leave this blank to issue the cards without a recorded price'
                   : null
               }
             >
@@ -505,7 +520,7 @@ export function GenerateCodesDialog({
               checked={free}
               onChange={setFree}
               label="Free cards"
-              description="Issued at a price of 0: no revenue when redeemed."
+              description="Issued at a known price of 0: no revenue when redeemed. Different from leaving the price blank, which means the amount was never recorded."
             />
           </div>
 

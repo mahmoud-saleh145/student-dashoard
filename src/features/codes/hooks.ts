@@ -82,7 +82,11 @@ export interface GenerateCodesInput {
   /**
    * The price of one card, in whole EGP; 0 for free cards. It is the revenue
    * figure when a card is first redeemed and never affects what it unlocks.
-   * Optional to the API, but the dialog always sends it.
+   *
+   * Omit it to issue cards whose price was never recorded: the server stores
+   * null, which is reported as "Not recorded" and kept distinct from a free
+   * card's 0. Nothing is substituted for it — not zero, not the catalogue
+   * price.
    */
   priceAmount?: number;
   expiresAt?: string;
@@ -96,7 +100,11 @@ export interface GenerateCodesResult {
   targetName: string;
   requested: number;
   created: number;
-  /** The price the server stored per card (0 when free); absent from older APIs. */
+  /**
+   * The price the server stored per card: a number when it was priced, 0 when
+   * the cards are free, null when none was recorded. Absent only from an older
+   * API, which cannot be told apart from unpriced by the value alone.
+   */
   priceAmount?: number | null;
   /** The plaintext codes, returned once and only at creation. */
   codes: string[];
