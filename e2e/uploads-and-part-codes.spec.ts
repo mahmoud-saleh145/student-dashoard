@@ -226,7 +226,7 @@ test.describe('PART access cards', () => {
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('Part').selectOption('part-1');
     await dialog.getByLabel('How many cards').fill('10');
-    await dialog.getByLabel('Card price').fill('600');
+    await dialog.getByLabel('Card price (optional)').fill('600');
     // Wait for the request to land before asking the stub what it received —
     // reading straight after the click raced the browser and flaked.
     await Promise.all([
@@ -252,7 +252,7 @@ test.describe('PART access cards', () => {
 
     await dialog.getByLabel('Course').selectOption('course-1');
     await dialog.getByLabel('How many cards').fill('5');
-    await dialog.getByLabel('Card price').fill('450');
+    await dialog.getByLabel('Card price (optional)').fill('450');
     // Wait for the request to land before asking the stub what it received —
     // reading straight after the click raced the browser and flaked.
     await Promise.all([

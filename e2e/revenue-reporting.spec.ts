@@ -77,17 +77,47 @@ async function openGenerate(page: Page) {
 }
 
 test.describe('Generate codes: the card price', () => {
-  test('will not generate until a whole-EGP price is entered or the cards are marked free', async ({
+  test('generates with the price left blank, and says the price was not recorded', async ({
     page,
     signIn,
   }) => {
     await signIn('admin');
     const dialog = await openGenerate(page);
     const generate = dialog.getByRole('button', { name: /^Generate \d* ?codes$/ });
-    const price = dialog.getByLabel('Card price');
+    const price = dialog.getByLabel('Card price (optional)');
 
-    // No default: cards issued without a price are what left sales unreportable.
-    await expect(generate).toBeDisabled();
+    // Blank is a valid answer, not an unfinished form: the card's scope is
+    // what grants access, so nothing has to be priced before generating.
+    await expect(price).toHaveValue('');
+    await expect(generate).toBeEnabled();
+
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/api/proxy/admin/codes/generate')),
+      generate.click(),
+    ]);
+
+    // The key is omitted entirely rather than sent as 0 or as the catalogue
+    // price — "not recorded" has to stay distinguishable from "free".
+    const sent = await (
+      await page.request.get(`${STUB_API}/api/v1/__test__/last-generate-codes`)
+    ).json();
+    expect(sent.data).not.toHaveProperty('priceAmount');
+    expect(sent.data).not.toHaveProperty('free');
+    expect(sent.data).not.toHaveProperty('amountCollected');
+
+    // The stub stores what it was sent, so it answers null — "Not recorded".
+    await expect(dialog).toContainText('Not recorded');
+    await expect(dialog).not.toContainText('Free cards');
+  });
+
+  test('still refuses a price that is present but wrong, and accepts a real one', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    const dialog = await openGenerate(page);
+    const generate = dialog.getByRole('button', { name: /^Generate \d* ?codes$/ });
+    const price = dialog.getByLabel('Card price (optional)');
 
     // The API takes whole EGP; 0 is spelled "Free cards", not typed.
     for (const bad of ['0', '10.5']) {
@@ -99,10 +129,10 @@ test.describe('Generate codes: the card price', () => {
     await price.fill('600');
     await expect(generate).toBeEnabled();
 
+    // Blank again is still fine — the error above was about the text, not
+    // about the field being empty.
     await price.fill('');
-    await expect(generate).toBeDisabled();
-    await dialog.getByRole('switch', { name: 'Free cards' }).click();
-    await expect(price).toBeDisabled();
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
     await expect(generate).toBeEnabled();
   });
 
@@ -115,7 +145,7 @@ test.describe('Generate codes: the card price', () => {
 
     // Below the course's catalogue price (250): the card's own price is sent,
     // and nothing in the request is derived from the catalogue.
-    await dialog.getByLabel('Card price').fill('200');
+    await dialog.getByLabel('Card price (optional)').fill('200');
     await Promise.all([
       page.waitForResponse((r) => r.url().includes('/api/proxy/admin/codes/generate')),
       dialog.getByRole('button', { name: /^Generate \d* ?codes$/ }).click(),
@@ -151,6 +181,23 @@ test.describe('Generate codes: the card price', () => {
     expect(sent.data).not.toHaveProperty('free');
 
     await expect(dialog).toContainText('Free cards');
+    await expect(dialog).not.toContainText('Not recorded');
+  });
+
+  test('the free switch stays distinguishable from leaving the price blank', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    const dialog = await openGenerate(page);
+    const price = dialog.getByLabel('Card price (optional)');
+
+    await dialog.getByRole('switch', { name: 'Free cards' }).click();
+    await expect(price).toBeDisabled();
+    await expect(price).toHaveValue('');
+    await dialog.getByRole('switch', { name: 'Free cards' }).click();
+    await expect(price).toBeEnabled();
+    await expect(price).toHaveValue('');
   });
 });
 
