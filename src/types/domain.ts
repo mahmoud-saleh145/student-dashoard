@@ -390,6 +390,16 @@ export interface CourseSummary {
   faculty: NamedRef | null;
   academicYear: (NamedRef & { order: number }) | null;
   subject: NamedRef | null;
+  /**
+   * The departments this course is offered to, flattened out of the join rows
+   * and already ordered by the catalogue's own order (`sortOrder`, then `name`),
+   * so a consumer never has to sort them to display them consistently.
+   *
+   * Optional because the API can be deployed before the dashboard is — the same
+   * reason `DashboardStats` keeps its newer fields optional. Absent and empty
+   * mean the same thing to a reader: no department, so none named.
+   */
+  departments?: { id: string; name: string; facultyId: string }[];
   publishedAt: string | null;
   archivedAt: string | null;
   createdAt: string;

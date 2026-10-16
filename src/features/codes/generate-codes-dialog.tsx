@@ -26,26 +26,33 @@ import { queryKeys } from '@/lib/query-keys';
 import type { CodeTargetType, CourseSummary, SectionRow } from '@/types/domain';
 
 /**
- * How one course reads in the picker: `Biology (Faculty of Medicine – Cairo
- * University)`.
+ * How one course reads in the picker:
+ * `Biology (Faculty of Medicine – Cairo University – Anatomy – Histology)`.
  *
  * Two courses can easily share a title across colleges — "Anatomy" exists in
  * every medical faculty — and the picker previously showed the title alone, so
  * the only way to tell them apart was to guess from the order. The affiliation
  * is what disambiguates them.
  *
+ * A course is offered to several departments at once (`CourseDepartment` is a
+ * join table, not a single column), so the departments are named too, in the
+ * order the API already sorted them. Every part of the affiliation is
+ * independently optional and each missing one is dropped rather than rendered
+ * empty, which is why this is one list and one join:
+ *
+ *   both set      →  Biology (Faculty of Medicine – Cairo University)
+ *   faculty only  →  Biology (Faculty of Medicine)
+ *   none of them  →  Biology
+ *
+ * A course with no department therefore reads exactly as it did before
+ * departments were added — not `Biology ()`, and not `Biology (Faculty – )`.
+ *
  * Display only. The option's `value` stays `course.id`, so selection, the
  * generate request and the stored batch are byte-for-byte what they were.
- *
- * Every one of `faculty` and `university` is nullable on a course, and course
- * targeting is currently disabled platform-wide, so "neither is set" is the
- * common case here rather than an edge case. Only the parts that exist are
- * shown; with none, the label is the bare title rather than `Biology ()`.
- * A faculty without a university reads `Biology (Faculty of Medicine)`, which
- * is honest about what is known instead of inventing the missing half.
  */
 function courseOptionLabel(course: CourseSummary): string {
   const affiliation = [course.faculty?.name, course.university?.name]
+    .concat((course.departments ?? []).map((department) => department.name))
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part));
 
