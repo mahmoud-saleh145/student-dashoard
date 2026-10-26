@@ -90,6 +90,26 @@ const control = {
   /** Makes the storage PUT fail, for the upload-failure path. */
   failUpload: false,
   /**
+   * Makes the storage PUT store the bytes and THEN answer 500.
+   *
+   * This is the shape of the production failure: Cloudflare R2 committed a
+   * 522 MB lecture and answered the same request with `InternalError` (HTTP
+   * 500), which Cloudflare's own documentation calls out as transient — "retry
+   * the request". The browser was told the upload failed while the file sat in
+   * the bucket, and the row was left saying nothing had arrived.
+   *
+   * The order (store, then fail) is the whole point: it is what makes "the
+   * file is there but the browser was told it failed" reproducible.
+   */
+  failUploadAfterCommit: false,
+  /**
+   * Object key -> the number of bytes stored for it.
+   *
+   * The stand-in for the bucket, so `complete` can do what the real API does:
+   * look the object up before it queues anything.
+   */
+  storedObjects: new Map(),
+  /**
    * attachmentId -> row. Course material, keyed by scope so the two lists the
    * dashboard shows — a lecture's own documents and a section's — are genuinely
    * separate here rather than one list filtered twice.
@@ -1030,7 +1050,7 @@ function page(res, items) {
 }
 
 /** Exactly the shape `VideosService.status` returns. */
-function videoDetail(videoId, status, processingError) {
+function videoDetail(videoId, status, processingError, extra = {}) {
   const ready = status === 'READY';
   return {
     id: videoId,
@@ -1052,6 +1072,29 @@ function videoDetail(videoId, status, processingError) {
     processingStartedAt: status === 'QUEUED' ? null : '2026-02-01T10:00:00.000Z',
     processedAt: ready ? '2026-02-01T10:06:00.000Z' : null,
     sourceSizeBytes: 512_000_000,
+    /**
+     * True only once the bytes were CONFIRMED in storage.
+     *
+     * The real API writes `sourceSizeBytes` only after a HEAD on the object
+     * proved it is there, so this is the difference between "an upload was
+     * started" and "the file is in the bucket" — which is what the panel's
+     * recovery affordance keys off.
+     */
+    uploadConfirmed: status !== 'UPLOADING',
+    /**
+     * The platform delivers through Gumlet, so the panel shows its
+     * provisioning state. `gumletAssetId` is null until an asset exists,
+     * which is what lets the panel tell "Gumlet is working on it" from
+     * "nothing has been sent to Gumlet at all".
+     */
+    drmProvider: 'gumlet',
+    // An asset exists once the provider has been given the video. Before that
+    // the row carries no asset id, which is what lets the panel tell "Gumlet
+    // is working on it" from "nothing has been sent to Gumlet at all".
+    gumletAssetId: ready ? 'asset-stub' : null,
+    gumletStatus: ready ? 'ready' : null,
+    gumletError: null,
+    ...extra,
   };
 }
 
@@ -1108,6 +1151,27 @@ const server = createServer(async (req, res) => {
       control.failUpload = true;
       return ok(res, { armed: true });
     }
+    if (path === '/__test__/fail-upload-after-commit') {
+      // The production failure: the object is stored and the PUT is still
+      // answered with a 500.
+      control.failUploadAfterCommit = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/store-object') {
+      // Puts an object into the stand-in bucket without the browser sending
+      // anything. That is the stranded-upload state: the bytes are in storage
+      // and the row has never learned about them.
+      const videoId = url.searchParams.get('videoId') ?? 'vid-upload';
+      const bytes = Number(url.searchParams.get('bytes') ?? 512_000_000);
+      control.storedObjects.set(`videos/${videoId}/source.mp4`, bytes);
+      control.videos.set(videoId, {
+        status: 'UPLOADING',
+        polls: 0,
+        willFail: false,
+        completed: false,
+      });
+      return ok(res, { stored: true, videoId, bytes });
+    }
     if (path === '/__test__/fail-processing') {
       control.failProcessing = true;
       return ok(res, { armed: true });
@@ -1123,6 +1187,8 @@ const server = createServer(async (req, res) => {
     }
     if (path === '/__test__/reset') {
       control.failUpload = false;
+      control.failUploadAfterCommit = false;
+      control.storedObjects.clear();
       control.materialStatus = 'PUBLISHED';
       lastRequest.materialPatch = null;
       control.failProcessing = false;
@@ -1217,9 +1283,14 @@ const server = createServer(async (req, res) => {
     }
 
     if (method === 'PUT') {
-      // Drain the body so the socket is not left half-read.
+      // Drain the body so the socket is not left half-read, and count the
+      // bytes: the real bucket reports the object's length, and `complete`
+      // checks it.
+      let bytes = 0;
       await new Promise((resolve) => {
-        req.on('data', () => undefined);
+        req.on('data', (chunk) => {
+          bytes += chunk.length;
+        });
         req.on('end', resolve);
         req.on('error', resolve);
       });
@@ -1227,6 +1298,15 @@ const server = createServer(async (req, res) => {
       if (control.failUpload) {
         res.writeHead(500, { ...cors, 'content-type': 'text/plain' });
         return res.end('storage unavailable');
+      }
+
+      // Stored FIRST, then the answer. The order is what makes the
+      // "committed but reported as failed" case reproducible.
+      control.storedObjects.set(path.replace('/__storage__/', ''), bytes);
+
+      if (control.failUploadAfterCommit) {
+        res.writeHead(500, { ...cors, 'content-type': 'text/plain' });
+        return res.end('internal error');
       }
 
       res.writeHead(200, { ...cors, etag: '"stub-etag"' });
@@ -1860,7 +1940,12 @@ const server = createServer(async (req, res) => {
       ? `.${String(body.filename).split('.').pop().toLowerCase()}`
       : '.bin';
 
-    control.videos.set(videoId, { status: 'UPLOADING', polls: 0, willFail: false });
+    control.videos.set(videoId, {
+      status: 'UPLOADING',
+      polls: 0,
+      willFail: false,
+      completed: false,
+    });
 
     return ok(res, {
       videoId,
@@ -1876,10 +1961,40 @@ const server = createServer(async (req, res) => {
   const completeVideo = /^\/videos\/([^/]+)\/complete$/.exec(path);
   if (completeVideo && method === 'POST') {
     const videoId = completeVideo[1];
+    const body = await readBody(req);
+
+    // The real API verifies the object is really in the bucket before it
+    // queues anything, and refuses a length that differs from what the client
+    // sent. The stub does the same, so the dashboard's recovery path is
+    // exercised against a stand-in that behaves like the real one instead of
+    // against one that always says yes.
+    const stored = [...control.storedObjects.entries()].find(([key]) =>
+      key.startsWith(`videos/${videoId}/`),
+    );
+
+    if (!stored) {
+      return fail(
+        res,
+        400,
+        'UPLOAD_FAILED',
+        'The uploaded file was not found in storage, so the upload did not complete. Upload the file again.',
+      );
+    }
+
+    if (typeof body?.sizeBytes === 'number' && body.sizeBytes !== stored[1]) {
+      return fail(
+        res,
+        400,
+        'UPLOAD_FAILED',
+        `The file in storage is ${stored[1]} bytes but ${body.sizeBytes} bytes were uploaded, so the upload was cut short. Upload the file again.`,
+      );
+    }
+
     control.videos.set(videoId, {
       status: 'QUEUED',
       polls: 0,
       willFail: control.failProcessing,
+      completed: true,
     });
     return ok(res, { videoId, status: 'QUEUED', jobId: 'job-1' });
   }
@@ -1895,6 +2010,21 @@ const server = createServer(async (req, res) => {
     }
 
     state.polls += 1;
+
+    // A video whose upload never completed stays at UPLOADING forever. The
+    // real backend does exactly this: nothing is queued, so nothing advances
+    // it, and the row keeps saying the upload never finished. Advancing it
+    // here would hide the very state the recovery path exists for.
+    if (state.status === 'UPLOADING' && !state.completed) {
+      return ok(
+        res,
+        videoDetail(videoId, 'UPLOADING', null, {
+          uploadConfirmed: false,
+          sourceSizeBytes: null,
+        }),
+      );
+    }
+
     if (state.status === 'QUEUED') state.status = 'PROCESSING';
     else if (state.status === 'PROCESSING') {
       state.status = state.willFail ? 'FAILED' : 'READY';
@@ -1914,8 +2044,30 @@ const server = createServer(async (req, res) => {
   if (retryVideo && method === 'POST') {
     const videoId = retryVideo[1];
     // Retrying clears the armed failure, so the recovery path is reachable.
-    control.videos.set(videoId, { status: 'QUEUED', polls: 0, willFail: false });
+    control.videos.set(videoId, {
+      status: 'QUEUED',
+      polls: 0,
+      willFail: false,
+      completed: true,
+    });
     return ok(res, { videoId, status: 'QUEUED', jobId: 'job-2' });
+  }
+
+  const gumletStatus = /^\/videos\/([^/]+)\/gumlet\/status$/.exec(path);
+  if (gumletStatus && method === 'GET') {
+    const videoId = gumletStatus[1];
+    const state = control.videos.get(videoId);
+    const status = state?.status ?? 'UPLOADING';
+    // A provider asset exists only once the video is far enough along. The
+    // panel's wording depends on this distinction, so the stub keeps it.
+    const hasAsset = status === 'READY';
+    return ok(res, {
+      assetId: hasAsset ? `asset-${videoId}` : null,
+      gumletStatus: hasAsset ? 'ready' : null,
+      videoStatus: status,
+      error: null,
+      playable: hasAsset,
+    });
   }
 
   // The authoring view the content tab reads, in the shape the real

@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 
-import { expect, resetStub, test } from './fixtures';
+import { expect, resetStub, stubRequests, test } from './fixtures';
 
 /**
  * Lecture video: upload, processing, and the two ways it ends.
@@ -15,6 +15,18 @@ import { expect, resetStub, test } from './fixtures';
  * The stub advances one step per poll (QUEUED → PROCESSING → READY), which
  * means a dashboard that stopped polling would hang on PROCESSING here rather
  * than quietly passing.
+ *
+ * THE INTERRUPTED UPLOAD
+ * ----------------------
+ * The last group of tests covers the failure this dashboard actually produced
+ * in production on 2026-10-21: Cloudflare R2 committed a 522 MB lecture and
+ * then answered the same request with HTTP 500. The file was in the bucket,
+ * the browser was told the upload had failed, and the row was left saying
+ * nothing had arrived — so nothing was ever processed and nothing was ever
+ * sent to the DRM provider.
+ *
+ * The stub can reproduce that exactly (`/__test__/fail-upload-after-commit`),
+ * which is what makes the behaviour assertable rather than aspirational.
  */
 
 const STUB_API = `http://127.0.0.1:${process.env.STUB_API_PORT ?? 4599}`;
@@ -38,6 +50,12 @@ async function openVideoDialog(page: Page, lecture = 'Muscles of the forearm') {
   await row.getByRole('button', { name: /video/i }).click();
 
   return page.getByRole('dialog');
+}
+
+/** How many times the browser actually PUT the bytes at the storage stand-in. */
+async function storagePutCount(page: Page): Promise<number> {
+  const requests = await stubRequests(page);
+  return requests.filter((r) => r.startsWith('PUT /__storage__/videos/')).length;
 }
 
 test.describe('lecture video', () => {
@@ -114,7 +132,11 @@ test.describe('lecture video', () => {
     const dialog = await openVideoDialog(page);
     await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
 
-    await expect(dialog.getByRole('alert')).toContainText(/storage refused|could not reach/i);
+    // The retries are real, so this takes a few seconds to settle.
+    await expect(dialog.getByRole('alert')).toContainText(
+      /storage (refused|reported)|could not reach/i,
+      { timeout: 20_000 },
+    );
     await expect(dialog.getByText(/Waiting for a transcoding worker/i)).toHaveCount(0);
   });
 
@@ -199,5 +221,156 @@ test.describe('lecture video', () => {
     });
 
     expect(response.status()).toBe(401);
+  });
+});
+
+/**
+ * The interrupted upload.
+ *
+ * On 2026-10-21 Cloudflare R2 committed a 522 MB lecture and then answered
+ * the same request with HTTP 500. The browser believed the upload failed, so
+ * it never told the API the file was there. The row stayed at `UPLOADING`
+ * with no job and no provider asset, the dashboard said "Gumlet is packaging
+ * this video" when the provider had never heard of it, and the file — which
+ * was perfectly good — sat in the bucket with nothing pointing at it.
+ *
+ * These tests pin the behaviour that fixes it.
+ */
+test.describe('an upload the store reported as failed', () => {
+  test('finishes the upload when the file was stored anyway', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    // The store keeps the bytes and answers 500 — Cloudflare's documented
+    // `InternalError`, whose own remedy is "retry the request".
+    await page.request.get(`${STUB_API}/__test__/fail-upload-after-commit`);
+
+    const dialog = await openVideoDialog(page);
+    await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
+
+    // The upload completes, because the file IS there.
+    await expect(
+      dialog.getByText(/Queued for processing\.|Being processed\.|Ready to stream\./),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('does not send the file a second time', async ({ page, signIn }) => {
+    await signIn('admin');
+    await page.request.get(`${STUB_API}/__test__/fail-upload-after-commit`);
+
+    const dialog = await openVideoDialog(page);
+    await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
+
+    await expect(
+      dialog.getByText(/Queued for processing\.|Being processed\.|Ready to stream\./),
+    ).toBeVisible({ timeout: 20_000 });
+
+    // The decisive assertion. The reader's connection carried the file once;
+    // a second upload would have cost them the whole lecture again.
+    expect(await storagePutCount(page)).toBe(1);
+  });
+
+  test('says plainly that the file was found, not uploaded again', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    await page.request.get(`${STUB_API}/__test__/fail-upload-after-commit`);
+
+    const dialog = await openVideoDialog(page);
+    await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
+
+    await expect(
+      dialog.getByText(/Queued for processing\.|Being processed\.|Ready to stream\./),
+    ).toBeVisible({ timeout: 20_000 });
+
+    // "It failed" and "it worked" are both true here, and only one of them
+    // helps the person reading it.
+    await expect(
+      dialog.getByText(/the file was found in storage.*not uploaded again/i),
+    ).toBeVisible();
+  });
+
+  test('retries a failure where nothing was stored', async ({ page, signIn }) => {
+    await signIn('admin');
+    // The store refuses and keeps nothing.
+    await page.request.get(`${STUB_API}/__test__/fail-upload`);
+
+    const dialog = await openVideoDialog(page);
+    await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
+
+    await expect(dialog.getByRole('alert')).toBeVisible({ timeout: 20_000 });
+
+    // It tried more than once: a transient fault at the object store is worth
+    // another go, and the provider says so.
+    expect(await storagePutCount(page)).toBeGreaterThan(1);
+  });
+
+  test('says the file was not saved, rather than leaving it ambiguous', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    await page.request.get(`${STUB_API}/__test__/fail-upload`);
+
+    const dialog = await openVideoDialog(page);
+    await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
+
+    await expect(dialog.getByRole('alert')).toContainText(/not saved/i, { timeout: 20_000 });
+  });
+
+  test('does not claim the provider is packaging a video it never received', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+    await page.request.get(`${STUB_API}/__test__/fail-upload`);
+
+    const dialog = await openVideoDialog(page);
+    await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
+
+    await expect(dialog.getByRole('alert')).toBeVisible({ timeout: 20_000 });
+
+    // The upload never finished, so nothing was ever sent to the DRM
+    // provider. The panel used to say "Gumlet is packaging this video" here,
+    // which is how an administrator was told the system was busy with their
+    // file when it had not even started.
+    await expect(
+      dialog.getByText(/Nothing has been sent for DRM packaging yet/i),
+    ).toBeVisible();
+    await expect(dialog.getByText(/Gumlet is packaging this video/i)).toHaveCount(0);
+  });
+
+  test('recovers an upload whose file is already in storage, without re-uploading', async ({
+    page,
+    signIn,
+  }) => {
+    await signIn('admin');
+
+    // The stranded state: the bytes are in the bucket and the row has never
+    // learned about them. Nothing was sent by the browser, so the file is put
+    // there directly.
+    await page.request.get(
+      `${STUB_API}/__test__/store-object?videoId=vid-1&bytes=512000000`,
+    );
+
+    // A lecture that already has a video, so the panel knows which video it is
+    // looking at without an upload having been started in this session.
+    const dialog = await openVideoDialog(page, 'Skeletal system');
+
+    // The panel offers to CHECK rather than to re-upload.
+    await expect(
+      dialog.getByRole('button', { name: /check whether the file arrived/i }),
+    ).toBeVisible({ timeout: 20_000 });
+
+    await dialog.getByRole('button', { name: /check whether the file arrived/i }).click();
+
+    // The upload finishes, and the file was never sent again.
+    await expect(
+      dialog.getByText(/Queued for processing\.|Being processed\.|Ready to stream\./),
+    ).toBeVisible({ timeout: 20_000 });
+    expect(await storagePutCount(page)).toBe(0);
   });
 });

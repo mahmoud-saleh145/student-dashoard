@@ -9,7 +9,9 @@ import { ConfirmDialog } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 import {
+  isTerminalGumletFailure,
   useAdoptForGumlet,
+  useCompleteVideoUpload,
   useDeleteVideo,
   useGumletAssetState,
   useRetryVideoProcessing,
@@ -17,7 +19,7 @@ import {
   useVideoStatus,
 } from '@/features/videos/hooks';
 import { useTeacherCapabilities } from '@/features/settings/hooks';
-import { useVideoUpload, VIDEO_UPLOAD_TYPES } from '@/features/videos/upload';
+import { useVideoUpload, VIDEO_UPLOAD_MAX_LABEL, VIDEO_UPLOAD_TYPES } from '@/features/videos/upload';
 import { messageFor } from '@/lib/errors';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
@@ -95,6 +97,7 @@ export function LessonVideoPanel({
   const removeVideo = useDeleteVideo(courseId);
   const adoptGumlet = useAdoptForGumlet(courseId);
   const syncGumlet = useSyncGumletAsset(courseId);
+  const confirmUpload = useCompleteVideoUpload(courseId);
 
   // Once a video is on the Gumlet path, keep its provisioning state fresh so
   // staff do not have to keep pressing "check status" while Gumlet packages a
@@ -215,13 +218,36 @@ export function LessonVideoPanel({
         // channel the reader is already watching; the failure case is
         // surfaced inline by the panel's own alert below.
         toast.success(
-          result.status === 'errored' || result.status === 'failed'
+          isTerminalGumletFailure(result.status)
             ? 'Gumlet reported a problem — see the error below.'
             : 'Gumlet has not finished processing yet.',
         );
       }
     } catch (error) {
       toast.error(error, 'Gumlet status could not be checked');
+    }
+  }
+
+  /**
+   * Ask the server whether the file actually reached storage, and finish the
+   * upload if it did.
+   *
+   * A large direct-to-storage upload can be committed by the object store and
+   * then answered with an error, which leaves the reader believing it failed
+   * while the bytes sit in the bucket. Re-sending them costs another 522 MB
+   * of their connection; asking costs one HEAD. That is the whole point of
+   * this button.
+   */
+  async function runConfirmUpload() {
+    if (!videoId) return;
+    try {
+      await confirmUpload.mutateAsync(videoId);
+      toast.success(
+        'The file was found',
+        'It is in storage and has been queued for processing. Nothing was uploaded again.',
+      );
+    } catch (error) {
+      toast.error(error, 'The file was not found in storage — upload it again');
     }
   }
 
@@ -277,7 +303,7 @@ export function LessonVideoPanel({
                     ]
                       .filter(Boolean)
                       .join(' · ')
-                  : 'MP4, MOV, MKV, WebM or AVI. Up to 8 GB.'}
+                  : `MP4, MOV, MKV, WebM or AVI. Up to ${VIDEO_UPLOAD_MAX_LABEL}.`}
               </p>
 
               {/* Subtle, factual. Says the file is shared - it does NOT claim
@@ -366,6 +392,16 @@ export function LessonVideoPanel({
           </div>
         ) : null}
 
+        {/* --- the file was found even though the store reported a failure ---
+            Worth saying out loud: the reader was told the upload failed, and
+            then it turned out the file was there all along and was not sent a
+            second time. */}
+        {upload.phase === 'queued' && upload.recovered ? (
+          <p className="text-xs text-muted">
+            Storage reported a problem, but the file was found in storage. It was not uploaded again.
+          </p>
+        ) : null}
+
         {/* --- the upload itself failed --- */}
         {upload.phase === 'error' ? (
           <div className="space-y-2">
@@ -441,6 +477,40 @@ export function LessonVideoPanel({
         </div>
       ) : null}
 
+      {/* --- an upload that never finished ---------------------------------
+          A video can sit at UPLOADING with no job, no provider asset and no
+          confirmed file, because the transfer was interrupted. The bytes may
+          still be in the bucket: an object store can commit a large PUT and
+          then fail to answer it, and the reader is told the upload failed.
+
+          So the panel offers to CHECK rather than to re-upload. One HEAD
+          against the bucket decides it, and the file is never sent twice. */}
+      {currentStatus === 'UPLOADING' &&
+      detail &&
+      detail.uploadConfirmed === false &&
+      !upload.isBusy ? (
+        <div className="rounded-lg border border-border bg-surface-alt/40 px-3 py-2">
+          <p className="text-xs text-muted">
+            The file was never confirmed in storage, so nothing was sent for processing. It may
+            still be there — checking does not upload it again.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={confirmUpload.isPending}
+              onClick={() => void runConfirmUpload()}
+            >
+              Check whether the file arrived
+            </Button>
+            <Button type="button" variant="ghost" size="sm" onClick={pick}>
+              Upload the file again
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {status.isError && !upload.isBusy ? (
         <p role="alert" className="text-xs font-medium text-danger">
           {messageFor(status.error)}
@@ -489,6 +559,11 @@ export function LessonVideoPanel({
         <GumletPanel
           videoId={videoId}
           drmProvider={detail.drmProvider}
+          // Whether a provider asset EXISTS. Without this the panel had no way
+          // to tell "Gumlet is working on it" from "nothing has ever been sent
+          // to Gumlet", and it said the first for a video whose upload had
+          // failed before the provider was ever involved.
+          hasGumletAsset={Boolean(detail.gumletAssetId)}
           // Prefer the polled provisioning state when it has one; fall back to
           // the video row so the panel still renders before the first poll
           // resolves.
@@ -520,6 +595,7 @@ export function LessonVideoPanel({
 function GumletPanel({
   videoId,
   drmProvider,
+  hasGumletAsset,
   gumletStatus,
   gumletError,
   videoStatus,
@@ -532,6 +608,8 @@ function GumletPanel({
 }: {
   videoId: string;
   drmProvider: 'gumlet' | null;
+  /** True when a Gumlet asset actually exists for this video. */
+  hasGumletAsset: boolean;
   gumletStatus: string | null;
   gumletError: string | null;
   videoStatus: VideoStatus | null;
@@ -553,7 +631,33 @@ function GumletPanel({
     );
   }
 
-  const isFailed = gumletStatus === 'errored' || gumletStatus === 'failed' || videoStatus === 'FAILED';
+  const isFailed = isTerminalGumletFailure(gumletStatus) || videoStatus === 'FAILED';
+
+  /**
+   * What is actually true, in order of how much it tells the reader.
+   *
+   * The wording matters more than it looks. A panel that says "Gumlet is
+   * packaging this video" for a video whose upload never finished is not a
+   * cosmetic problem: it tells an administrator that the system is working on
+   * their file when in fact nothing has been sent to the provider at all, and
+   * it is why an upload that failed hours earlier looked like it was still in
+   * progress.
+   */
+  function describeState(): string {
+    if (isFailed) {
+      return gumletError ?? 'Gumlet reported a problem and this video is not playable.';
+    }
+    if (videoStatus === 'READY') {
+      return 'Packaged and encrypted. Students play it as DRM-protected DASH.';
+    }
+    if (hasGumletAsset) {
+      return 'Gumlet is packaging this video. This panel refreshes on its own, so there is nothing to do here until it reports ready.';
+    }
+    if (videoStatus === 'QUEUED' || videoStatus === 'PROCESSING') {
+      return 'Queued for DRM packaging. Gumlet starts once the file is on its way.';
+    }
+    return 'Nothing has been sent for DRM packaging yet — the file still has to finish uploading.';
+  }
 
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-border p-2">
@@ -564,17 +668,10 @@ function GumletPanel({
 
       {isFailed ? (
         <p role="alert" className="text-xs font-medium text-danger">
-          {gumletError ?? 'Gumlet reported a problem and this video is not playable.'}
-        </p>
-      ) : videoStatus === 'READY' ? (
-        <p className="text-xs text-muted">
-          Packaged and encrypted. Students play it as DRM-protected DASH.
+          {describeState()}
         </p>
       ) : (
-        <p className="text-xs text-muted">
-          Gumlet is packaging this video. This panel refreshes on its own, so
-          there is nothing to do here until it reports ready.
-        </p>
+        <p className="text-xs text-muted">{describeState()}</p>
       )}
 
       <div className="flex flex-wrap gap-1.5">
@@ -602,7 +699,7 @@ function GumletPanel({
 
 /** Whether Gumlet has finished and we should stop offering "check status". */
 function drmAssetReady(gumletStatus: string | null, videoStatus: VideoStatus | null): boolean {
-  if (gumletStatus === 'failed' || gumletStatus === 'errored') return true;
+  if (isTerminalGumletFailure(gumletStatus)) return true;
   return videoStatus === 'READY';
 }
 

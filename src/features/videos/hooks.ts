@@ -6,6 +6,18 @@ import { api } from '@/lib/api-client';
 import { queryKeys } from '@/lib/query-keys';
 import type { VideoStatus } from '@/types/domain';
 
+/**
+ * Gumlet statuses after which an asset will never become playable.
+ *
+ * Mirrors `isTerminalGumletFailure` in the backend's `gumlet-failure.ts`.
+ * `deleted` is the asset having been removed at Gumlet: treated as "still in
+ * progress", the panel kept polling it and offering "Check Gumlet status" for a
+ * video that can only be fixed by processing it again.
+ */
+export function isTerminalGumletFailure(status: string | null | undefined): boolean {
+  return status === 'errored' || status === 'failed' || status === 'deleted';
+}
+
 /** Reads and writes for one lecture's video. Every route is `@StaffOnly()`. */
 
 /** How often to re-check a Gumlet asset that has not settled yet. */
@@ -36,6 +48,17 @@ export interface VideoStatusDetail {
   processingStartedAt: string | null;
   processedAt: string | null;
   sourceSizeBytes: number | null;
+  /**
+   * True when the bytes were CONFIRMED in storage.
+   *
+   * The backend only writes `sourceSizeBytes` after a HEAD on the object
+   * proved it is really there, so this is the difference between "an upload
+   * was started" and "the file is in the bucket". A video can sit at
+   * `UPLOADING` with no job and no provider asset when its upload was
+   * interrupted — and the honest thing to say about that is "the file did not
+   * arrive", not "it is being processed".
+   */
+  uploadConfirmed?: boolean;
   deleted?: boolean;
   /**
    * Playback provider for this video. `null` is the legacy R2/AES-128 HLS
@@ -182,10 +205,49 @@ export function useGumletAssetState(videoId: string | null, enabled = true) {
       const data = query.state.data;
       if (data?.playable) return false;
       const gumletStatus = data?.gumletStatus;
-      if (gumletStatus === 'errored' || gumletStatus === 'failed') return false;
+      if (isTerminalGumletFailure(gumletStatus)) return false;
       // No data yet is not a reason to schedule a repeat.
       if (!data) return false;
       return GUMLET_POLL_MS;
+    },
+  });
+}
+
+/**
+ * Asks the API to confirm the upload and queue it — WITHOUT sending the file
+ * again.
+ *
+ * This is the recovery for an upload that was interrupted. The bytes may
+ * already be in the bucket: an object store can commit a large PUT and then
+ * fail to answer it, and the browser is left believing the upload failed. On
+ * 2026-10-21 that left a 522 MB lecture sitting in storage with a row that
+ * said nothing had arrived, and no way to finish the job.
+ *
+ * The backend's `complete` endpoint verifies the object with a HEAD and, if
+ * it is there, queues the processing job. Nothing is re-uploaded, and nothing
+ * is re-created: the same row, the same object, one job.
+ *
+ * The endpoint is idempotent, so calling it on a video that is already queued
+ * returns the current state instead of starting a second job.
+ */
+export function useCompleteVideoUpload(courseId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (videoId: string) =>
+      api.post<{
+        videoId: string;
+        status: VideoStatus;
+        jobId: string | null;
+        sourceSizeBytes?: number;
+        alreadyQueued?: boolean;
+      }>(`videos/${videoId}/complete`),
+    onSuccess: async (_result, videoId) => {
+      // Back to QUEUED, which restarts polling.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.videos.status(videoId) });
+      if (courseId) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
+      }
     },
   });
 }
