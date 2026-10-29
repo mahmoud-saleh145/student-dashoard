@@ -32,6 +32,7 @@ import {
   type ExportColumn,
 } from '@/lib/export-excel';
 import { formatDate, formatNumber, formatPhone } from '@/lib/format';
+import { PASSWORD_POLICY_HINT, newPasswordProblem } from '@/lib/password-policy';
 import { useListQuery } from '@/lib/use-list-query';
 import { ACCOUNT_STATUSES, type TeacherRow } from '@/types/domain';
 
@@ -349,7 +350,10 @@ const createSchema = z
     email: z.string().trim().email('Enter a valid email').max(160).optional().or(z.literal('')),
     gender: z.enum(['MALE', 'FEMALE']).optional().or(z.literal('')),
     title: z.string().trim().max(120).optional().or(z.literal('')),
-    password: z.string().min(8, 'At least 8 characters').max(128),
+    password: z.string().superRefine((value, ctx) => {
+      const problem = newPasswordProblem(value);
+      if (problem) ctx.addIssue({ code: 'custom', message: problem });
+    }),
     confirmPassword: z.string(),
   })
   .refine((values) => values.password === values.confirmPassword, {
@@ -482,7 +486,12 @@ function CreateTeacherDialog({ open, onClose }: { open: boolean; onClose: () => 
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Password" error={errors.password?.message} required>
+          <Field
+            label="Password"
+            hint={PASSWORD_POLICY_HINT}
+            error={errors.password?.message}
+            required
+          >
             {({ id, describedBy, invalid }) => (
               <TextInput
                 id={id}
@@ -530,8 +539,9 @@ function SetPasswordDialog({
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
 
+  const problem = password.length > 0 ? newPasswordProblem(password) : null;
   const mismatch = confirm.length > 0 && password !== confirm;
-  const valid = password.length >= 8 && password === confirm;
+  const valid = password.length > 0 && problem === null && password === confirm;
 
   async function submit() {
     if (!teacher || !valid) return;
@@ -566,12 +576,13 @@ function SetPasswordDialog({
       }
     >
       <div className="flex flex-col gap-4">
-        <Field label="New password" required hint="At least 8 characters.">
-          {({ id }) => (
+        <Field label="New password" required hint={PASSWORD_POLICY_HINT} error={problem}>
+          {({ id, invalid }) => (
             <TextInput
               id={id}
               type="password"
               autoComplete="new-password"
+              invalid={invalid}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoFocus

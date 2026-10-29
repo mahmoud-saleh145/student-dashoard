@@ -18,6 +18,7 @@ import { useResetPassword } from '@/features/teachers/hooks';
 import { api } from '@/lib/api-client';
 import { ApiError } from '@/lib/errors';
 import { formatDateTime, formatPhone } from '@/lib/format';
+import { PASSWORD_POLICY_HINT, newPasswordProblem } from '@/lib/password-policy';
 import { queryKeys } from '@/lib/query-keys';
 import { useSession } from '@/lib/session-context';
 import { useListQuery } from '@/lib/use-list-query';
@@ -195,7 +196,10 @@ const schema = z
         message: 'Enter a valid Egyptian mobile number',
       }),
     email: z.string().trim().email('Enter a valid email').max(160).optional().or(z.literal('')),
-    password: z.string().min(8, 'At least 8 characters').max(128),
+    password: z.string().superRefine((value, ctx) => {
+      const problem = newPasswordProblem(value);
+      if (problem) ctx.addIssue({ code: 'custom', message: problem });
+    }),
     confirmPassword: z.string(),
   })
   .refine((values) => values.password === values.confirmPassword, {
@@ -319,7 +323,12 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
         </div>
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Field label="Password" error={errors.password?.message} required>
+          <Field
+            label="Password"
+            hint={PASSWORD_POLICY_HINT}
+            error={errors.password?.message}
+            required
+          >
             {({ id, describedBy, invalid }) => (
               <TextInput
                 id={id}
@@ -378,8 +387,9 @@ function SetAdminPasswordDialog({
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
 
+  const problem = password.length > 0 ? newPasswordProblem(password) : null;
   const mismatch = confirm.length > 0 && password !== confirm;
-  const valid = password.length >= 8 && password === confirm;
+  const valid = password.length > 0 && problem === null && password === confirm;
 
   async function submit() {
     if (!admin || !valid) return;
@@ -414,12 +424,13 @@ function SetAdminPasswordDialog({
       }
     >
       <div className="flex flex-col gap-4">
-        <Field label="New password" required hint="At least 8 characters.">
-          {({ id }) => (
+        <Field label="New password" required hint={PASSWORD_POLICY_HINT} error={problem}>
+          {({ id, invalid }) => (
             <TextInput
               id={id}
               type="password"
               autoComplete="new-password"
+              invalid={invalid}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               autoFocus

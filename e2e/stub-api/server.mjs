@@ -15,6 +15,11 @@
 
 import { createServer } from 'node:http';
 
+import {
+  handleStudentPasswordControl,
+  handleStudentPasswordRoutes,
+} from './student-password.mjs';
+
 const PORT = Number(process.env.STUB_API_PORT ?? 4599);
 
 // --- fixtures ---------------------------------------------------------------
@@ -1261,6 +1266,7 @@ const server = createServer(async (req, res) => {
     if (path === '/__test__/video-deletes') {
       return ok(res, { lessonIds: control.videoDeleteLessonIds });
     }
+    if (handleStudentPasswordControl(path, res)) return;
     return fail(res, 404, 'NOT_FOUND', 'Unknown control endpoint.');
   }
 
@@ -1464,6 +1470,9 @@ const server = createServer(async (req, res) => {
   if (adminOnlyWrites.some((rule) => rule.method === method && rule.match(path)) && !isAdmin) {
     return fail(res, 403, 'INSUFFICIENT_ROLE', 'Only administrators can perform this action.');
   }
+
+  // The student drawer and its password reset — see student-password.mjs.
+  if (await handleStudentPasswordRoutes({ req, res, path, method, user })) return;
 
   if (path === '/auth/me') {
     return ok(res, {

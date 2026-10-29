@@ -24,7 +24,9 @@ import {
   useStudentHistory,
   useStudentSessions,
 } from '@/features/students/hooks';
+import { ResetStudentPasswordDialog } from '@/features/students/reset-password-dialog';
 import { formatDate, formatDateTime, formatMoney, formatPhone, maskCode } from '@/lib/format';
+import { useSession } from '@/lib/session-context';
 
 /**
  * One student.
@@ -32,8 +34,12 @@ import { formatDate, formatDateTime, formatMoney, formatPhone, maskCode } from '
  * Deliberately absent: any way to see a password. The backend stores argon2id
  * hashes and exposes no endpoint that returns them or anything derived from
  * them — there is nothing to display, and the dashboard does not pretend
- * otherwise. Setting a new password is a write, and it revokes every session
- * the account holds.
+ * otherwise.
+ *
+ * "Reset password" is the only way a student's password changes: students
+ * cannot change or recover their own, and contact the administration instead.
+ * It is offered to roles with `manageStudents` (MASTER, ADMIN). Hiding it is
+ * presentation only — the backend refuses anyone else.
  */
 export function StudentDrawer({
   studentId,
@@ -43,6 +49,9 @@ export function StudentDrawer({
   onClose: () => void;
 }) {
   const toast = useToast();
+  const { can } = useSession();
+  const canResetPassword = can('manageStudents');
+  const [resettingPassword, setResettingPassword] = useState(false);
   const [tab, setTab] = useState('profile');
   const [confirming, setConfirming] = useState<'block' | 'unblock' | 'reset-device' | null>(
     null,
@@ -137,6 +146,12 @@ export function StudentDrawer({
                 Send notification
               </Button>
 
+              {canResetPassword ? (
+                <Button variant="secondary" onClick={() => setResettingPassword(true)}>
+                  Reset password
+                </Button>
+              ) : null}
+
               {blocked ? (
                 <Button variant="primary" onClick={() => setConfirming('unblock')}>
                   Unblock
@@ -199,8 +214,9 @@ export function StudentDrawer({
 
               <p className="mt-5 rounded-lg border border-border bg-surface-alt p-3 text-xs text-muted">
                 Passwords are stored as one-way hashes and are never retrievable — not here, not
-                anywhere in the API. If this student is locked out, set a new password from
-                their account; doing so signs them out of every session.
+                anywhere in the API. Students cannot change or recover their own password; if
+                this student has forgotten it or is locked out, verify their identity and use
+                “Reset password”. That signs them out of every session.
               </p>
             </TabPanel>
 
@@ -382,6 +398,13 @@ export function StudentDrawer({
         variant={confirming === 'unblock' ? 'primary' : 'danger'}
         busy={setStatus.isPending || resetBinding.isPending}
       />
+
+      {canResetPassword ? (
+        <ResetStudentPasswordDialog
+          student={resettingPassword && data ? data : null}
+          onClose={() => setResettingPassword(false)}
+        />
+      ) : null}
 
       <ReasonConfirmDialog
         open={deleting}
