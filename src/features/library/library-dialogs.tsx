@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Checkbox, Field, Select, Switch, TextArea, TextInput } from '@/components/ui/field';
 import { Modal } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
-import { useAcademicYears, useFaculties, useSubjects, useUniversities } from '@/features/catalog/hooks';
+import { useSubjects } from '@/features/catalog/hooks';
 import { fieldErrors, messageFor } from '@/lib/errors';
 import { formatMoney } from '@/lib/format';
 import type {
@@ -19,6 +19,24 @@ import type {
 import { ThumbnailField } from '@/features/thumbnails/thumbnail-field';
 import { useThumbnailUpload } from '@/features/thumbnails/upload';
 
+import {
+  EMPTY_AUDIENCE,
+  audienceDiff,
+  audienceFromMaterial,
+  audienceServerErrors,
+  checkAudience,
+  createMaterialBody,
+  describeFieldErrors,
+  packageMembership,
+  packagePartIds,
+  packagePartIdsForUpdate,
+  packageRemovals,
+  summarizeDraft,
+  summarizeSaved,
+  updateMaterialBody,
+  type AudienceDraft,
+  type MaterialScalars,
+} from './audience';
 import { DocumentUploadField } from './document-upload-field';
 import {
   useCreateLibraryPackage,
@@ -26,8 +44,10 @@ import {
   useCreateMaterial,
   useUpdateLibraryPackage,
   useUpdateLibraryPart,
+  useLibraryAudienceData,
   useUpdateMaterial,
 } from './hooks';
+import { LibraryAudienceEditor } from './library-audience-editor';
 import { useLibraryUpload } from './upload';
 
 /**
@@ -56,198 +76,362 @@ export function MaterialDialog({
   const toast = useToast();
   const create = useCreateMaterial();
   const update = useUpdateMaterial(material?.id ?? '');
-
-  const universities = useUniversities();
-  const [universityId, setUniversityId] = useState('');
-  const faculties = useFaculties(universityId || null);
-  const academicYears = useAcademicYears();
   const subjects = useSubjects();
 
   const [title, setTitle] = useState('');
   const [titleAr, setTitleAr] = useState('');
   const [description, setDescription] = useState('');
-  const [facultyId, setFacultyId] = useState('');
-  const [academicYearId, setAcademicYearId] = useState('');
   const [subjectId, setSubjectId] = useState('');
+  const [audience, setAudience] = useState<AudienceDraft>(EMPTY_AUDIENCE);
+  // An audience change on an existing material is applied only after the
+  // administrator has seen the old and the new side by side.
+  const [step, setStep] = useState<'edit' | 'confirm'>('edit');
+
+  const saved = useMemo(() => audienceFromMaterial(material), [material]);
+  const data = useLibraryAudienceData(audience);
 
   useEffect(() => {
     if (!open) return;
     setTitle(material?.title ?? '');
     setTitleAr(material?.titleAr ?? '');
     setDescription(material?.description ?? '');
-    setUniversityId(material?.universityId ?? '');
-    setFacultyId(material?.facultyId ?? '');
-    setAcademicYearId(material?.academicYearId ?? '');
     setSubjectId(material?.subjectId ?? '');
+    setAudience(audienceFromMaterial(material));
+    setStep('edit');
     create.reset();
     update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, material?.id]);
 
   const pending = create.isPending || update.isPending;
-  const errors = fieldErrors(create.error ?? update.error);
+  const mutationError = create.error ?? update.error;
+  const errors = fieldErrors(mutationError);
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const scalars = { title, titleAr, description, subjectId };
+  const edit = material
+    ? updateMaterialBody(scalars, audience, saved, material.subjectId)
+    : null;
+  // Creating always sends the audience; editing sends it only when it moved.
+  const sendsAudience = !material || Boolean(edit?.audienceChanged);
 
-    const body = {
-      title,
-      titleAr: titleAr || undefined,
-      description: description || undefined,
-      universityId: universityId || undefined,
-      facultyId: facultyId || undefined,
-      academicYearId: academicYearId || undefined,
-      subjectId: subjectId || undefined,
-    };
+  const check = checkAudience(audience, {
+    universities: data.universities.data,
+    faculties: data.faculties.data,
+    departments: data.departments.data,
+    ladder: data.ladder,
+  });
+  // The server's word wins over the form's guess for the field it names.
+  const audienceErrors = { ...check.errors, ...audienceServerErrors(errors) };
+  const audienceBlocked =
+    sendsAudience && (Object.keys(check.errors).length > 0 || check.pending);
 
+  const legacyAudience = Boolean(material) && (!saved.universityId || !saved.facultyId);
+
+  function changeAudience(next: AudienceDraft) {
+    setAudience(next);
+    // A refusal described the audience that was posted, not this one.
+    if (create.error) create.reset();
+    if (update.error) update.reset();
+  }
+
+  async function save() {
     try {
-      if (material) await update.mutateAsync(body);
-      else await create.mutateAsync(body);
+      if (material && edit) await update.mutateAsync(edit.body);
+      else await create.mutateAsync(createMaterialBody(scalars, audience));
 
-      toast.success(material ? 'Material updated' : 'Material created');
+      toast.success(
+        material ? 'Material updated' : 'Material created',
+        material && edit?.audienceChanged ? 'The new audience is in force.' : undefined,
+      );
       onClose();
     } catch (error) {
+      // Back to the form, where the field the server named is highlighted.
+      setStep('edit');
       toast.error(error, 'The material was not saved');
     }
+  }
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (audienceBlocked) return;
+    if (material && edit?.audienceChanged && step === 'edit') {
+      setStep('confirm');
+      return;
+    }
+    void save();
   };
+
+  const diff =
+    material && step === 'confirm'
+      ? audienceDiff(
+          material.audience
+            ? summarizeSaved(material.audience)
+            : summarizeDraft(saved, lookupOf(data)),
+          summarizeDraft(audience, lookupOf(data)),
+        )
+      : [];
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={material ? 'Edit material' : 'New library material'}
-      description="A publication — sold as its individual documents, or as packages of them."
+      title={
+        step === 'confirm'
+          ? 'Change who can see this material?'
+          : material
+            ? 'Edit material'
+            : 'New library material'
+      }
+      description={
+        step === 'confirm'
+          ? undefined
+          : 'A publication — sold as its individual documents, or as packages of them.'
+      }
       size="lg"
       busy={pending}
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={pending}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            form="material-form"
-            loading={pending}
-            disabled={title.trim().length < 2}
-          >
-            {material ? 'Save changes' : 'Create material'}
-          </Button>
-        </>
+        step === 'confirm' ? (
+          <>
+            <Button variant="secondary" onClick={() => setStep('edit')} disabled={pending}>
+              Back
+            </Button>
+            <Button onClick={() => void save()} loading={pending}>
+              Apply audience change
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={pending}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="material-form"
+              loading={pending}
+              disabled={title.trim().length < 2 || audienceBlocked}
+            >
+              {material
+                ? edit?.audienceChanged
+                  ? 'Review changes'
+                  : 'Save changes'
+                : 'Create material'}
+            </Button>
+          </>
+        )
       }
     >
-      <form id="material-form" onSubmit={submit} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Title" required error={errors.title}>
-            {({ id, describedBy, invalid }) => (
-              <TextInput
-                id={id}
-                aria-describedby={describedBy}
-                invalid={invalid}
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="Physics Revision Papers"
-              />
-            )}
-          </Field>
+      {step === 'confirm' && material ? (
+        <AudienceChangeReview
+          rows={diff}
+          published={material.status === 'PUBLISHED'}
+          otherChanges={scalarsChanged(material, scalars)}
+        />
+      ) : (
+        <form id="material-form" onSubmit={submit} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Title" required error={errors.title}>
+              {({ id, describedBy, invalid }) => (
+                <TextInput
+                  id={id}
+                  aria-describedby={describedBy}
+                  invalid={invalid}
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="Physics Revision Papers"
+                />
+              )}
+            </Field>
 
-          <Field label="Title (Arabic)" error={errors.titleAr}>
+            <Field label="Title (Arabic)" error={errors.titleAr}>
+              {({ id, describedBy }) => (
+                <TextInput
+                  id={id}
+                  aria-describedby={describedBy}
+                  dir="rtl"
+                  value={titleAr}
+                  onChange={(event) => setTitleAr(event.target.value)}
+                />
+              )}
+            </Field>
+          </div>
+
+          <Field label="Description" error={errors.description}>
             {({ id, describedBy }) => (
-              <TextInput
+              <TextArea
                 id={id}
                 aria-describedby={describedBy}
-                dir="rtl"
-                value={titleAr}
-                onChange={(event) => setTitleAr(event.target.value)}
-              />
-            )}
-          </Field>
-        </div>
-
-        <Field label="Description" error={errors.description}>
-          {({ id, describedBy }) => (
-            <TextArea
-              id={id}
-              aria-describedby={describedBy}
-              rows={3}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          )}
-        </Field>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="University" hint="Used to filter the student's catalogue.">
-            {({ id }) => (
-              <Select
-                id={id}
-                value={universityId}
-                onChange={(event) => {
-                  setUniversityId(event.target.value);
-                  setFacultyId('');
-                }}
-                placeholder="Any university"
-                options={(universities.data ?? []).map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                }))}
+                rows={3}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
               />
             )}
           </Field>
 
-          <Field label="Faculty">
-            {({ id }) => (
-              <Select
-                id={id}
-                value={facultyId}
-                onChange={(event) => setFacultyId(event.target.value)}
-                placeholder={universityId ? 'Any faculty' : 'Choose a university first'}
-                disabled={!universityId}
-                options={(faculties.data ?? []).map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                }))}
-              />
-            )}
-          </Field>
-
-          <Field label="Academic year">
-            {({ id }) => (
-              <Select
-                id={id}
-                value={academicYearId}
-                onChange={(event) => setAcademicYearId(event.target.value)}
-                placeholder="Any year"
-                options={(academicYears.data ?? []).map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                }))}
-              />
-            )}
-          </Field>
-
-          <Field label="Subject">
+          <Field
+            label="Subject"
+            hint={material?.subjectId ? 'Choose “No subject” to clear it.' : undefined}
+            error={errors.subjectId}
+          >
             {({ id }) => (
               <Select
                 id={id}
                 value={subjectId}
                 onChange={(event) => setSubjectId(event.target.value)}
                 placeholder="No subject"
-                options={(subjects.data ?? []).map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                }))}
+                options={[
+                  ...(subjects.data ?? []).map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  })),
+                  // A saved subject that is no longer listed stays visible as
+                  // what it is, instead of reading as "No subject".
+                  ...(subjectId &&
+                  subjects.data &&
+                  !subjects.data.some((item) => item.id === subjectId)
+                    ? [
+                        {
+                          value: subjectId,
+                          label: 'Current subject (no longer active)',
+                          disabled: true,
+                        },
+                      ]
+                    : []),
+                ]}
               />
             )}
           </Field>
-        </div>
 
-        {(create.error ?? update.error) && Object.keys(errors).length === 0 ? (
-          <p role="alert" className="text-sm font-medium text-danger">
-            {messageFor(create.error ?? update.error)}
-          </p>
-        ) : null}
-      </form>
+          {legacyAudience ? (
+            <p role="note" className="rounded-lg bg-surface-alt px-3 py-2 text-sm text-warning">
+              This material was created before an audience was required. Set its university and
+              college — it cannot be published until it has one.
+            </p>
+          ) : null}
+
+          <LibraryAudienceEditor
+            value={audience}
+            onChange={changeAudience}
+            data={data}
+            errors={audienceErrors}
+            saved={material?.audience ?? null}
+            disabled={pending}
+          />
+
+          {material && !edit?.audienceChanged && Object.keys(check.errors).length > 0 ? (
+            <p className="text-xs text-muted">
+              The saved audience needs attention, but saving other changes leaves it as it is.
+              Fix it before publishing.
+            </p>
+          ) : null}
+
+          {mutationError && Object.keys(errors).length === 0 ? (
+            <p role="alert" className="text-sm font-medium text-danger">
+              {messageFor(mutationError)}
+            </p>
+          ) : null}
+        </form>
+      )}
     </Modal>
+  );
+}
+
+function lookupOf(data: ReturnType<typeof useLibraryAudienceData>) {
+  return {
+    universities: data.universities.data,
+    faculties: data.faculties.data,
+    departments: data.departments.data,
+    ladder: data.ladder,
+  };
+}
+
+function scalarsChanged(material: LibraryMaterialDetail, scalars: MaterialScalars): boolean {
+  return (
+    scalars.title !== material.title ||
+    scalars.titleAr !== (material.titleAr ?? '') ||
+    scalars.description !== (material.description ?? '') ||
+    scalars.subjectId !== (material.subjectId ?? '')
+  );
+}
+
+/**
+ * The old-versus-new confirmation.
+ *
+ * States the one thing an administrator most needs to know before narrowing an
+ * audience: it does not take anything away from anyone who already paid.
+ * Entitlements are per part and survive any audience change; the backend's
+ * audit entry for the update records the previous and the new audience.
+ */
+function AudienceChangeReview({
+  rows,
+  published,
+  otherChanges,
+}: {
+  rows: ReturnType<typeof audienceDiff>;
+  published: boolean;
+  otherChanges: boolean;
+}) {
+  return (
+    <div className="space-y-4" data-testid="audience-change-review">
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <caption className="sr-only">Audience before and after this change</caption>
+          <thead className="bg-surface-alt text-xs text-muted">
+            <tr>
+              <th scope="col" className="px-3 py-2 text-start font-medium">
+                &nbsp;
+              </th>
+              <th scope="col" className="px-3 py-2 text-start font-medium">
+                Now
+              </th>
+              <th scope="col" className="px-3 py-2 text-start font-medium">
+                After this change
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.label}
+                className="border-t border-border"
+                data-changed={row.changed ? 'true' : 'false'}
+              >
+                <th scope="row" className="px-3 py-2 text-start font-medium text-foreground">
+                  {row.label}
+                </th>
+                <td className="px-3 py-2 text-muted">{row.before}</td>
+                <td className="px-3 py-2">
+                  <span
+                    className={row.changed ? 'font-semibold text-foreground' : 'text-muted'}
+                  >
+                    {row.after}
+                  </span>
+                  {row.changed ? (
+                    <Badge tone="warning" className="ms-2">
+                      changed
+                    </Badge>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <ul className="list-disc space-y-1 ps-5 text-sm text-muted">
+        <li>
+          <strong className="text-foreground">Existing purchases are not revoked.</strong>{' '}
+          Students who already bought a document keep reading it, even if they fall outside the
+          new audience. They cannot buy more from this material while outside it.
+        </li>
+        <li>
+          {published
+            ? 'This material is published, so the student library changes as soon as you apply this.'
+            : 'This material is not published, so no student sees it yet either way.'}
+        </li>
+        <li>The previous and the new audience are recorded in the admin audit log.</li>
+        {otherChanges ? <li>Your other edits to this material are saved with it.</li> : null}
+      </ul>
+    </div>
   );
 }
 
@@ -568,6 +752,19 @@ export function PackageDialog({
   const [description, setDescription] = useState('');
   const [price, setPrice] = useState('');
   const [partIds, setPartIds] = useState<string[]>([]);
+  // Taking a document out of a package is applied only after the
+  // administrator has seen exactly which ones leave.
+  const [step, setStep] = useState<'edit' | 'confirm'>('edit');
+
+  // A package belongs to this material and may hold only this material's
+  // documents. Ids in the stored membership whose document has since been
+  // withdrawn are kept apart: the backend refuses any id that is not a live
+  // part of the material, so they cannot be posted back — and they are never
+  // touched unless the contents are changed, and then only after confirmation.
+  const membership = useMemo(
+    () => packageMembership(pkg?.partIds ?? [], parts),
+    [pkg?.partIds, parts],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -575,14 +772,26 @@ export function PackageDialog({
     setTitleAr(pkg?.titleAr ?? '');
     setDescription(pkg?.description ?? '');
     setPrice(pkg?.price != null ? String(pkg.price) : '');
-    setPartIds(pkg?.partIds ?? []);
+    setPartIds(membership.current);
+    setStep('edit');
     create.reset();
     update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, pkg?.id]);
 
   const pending = create.isPending || update.isPending;
-  const errors = fieldErrors(create.error ?? update.error);
+  const mutationError = create.error ?? update.error;
+  const errors = fieldErrors(mutationError);
+
+  // Undefined while the selection is unchanged: then `partIds` is not sent at
+  // all and the stored membership — withdrawn items included — stays exactly
+  // as it is.
+  const contentsForUpdate = pkg
+    ? packagePartIdsForUpdate(membership.current, partIds, parts)
+    : undefined;
+  const removals = packageRemovals(pkg?.partIds ?? [], contentsForUpdate, parts);
+  const removalCount = removals.current.length + removals.withdrawn.length;
+  const needsConfirmation = Boolean(pkg) && removalCount > 0;
 
   const separately = parts
     .filter((part) => partIds.includes(part.id))
@@ -590,9 +799,7 @@ export function PackageDialog({
   const priceValue = Number(price);
   const saving = separately - priceValue;
 
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-
+  async function save() {
     try {
       if (pkg) {
         await update.mutateAsync({
@@ -601,7 +808,7 @@ export function PackageDialog({
           titleAr: titleAr || undefined,
           description: description || undefined,
           price: priceValue,
-          partIds,
+          ...(contentsForUpdate ? { partIds: contentsForUpdate } : {}),
         });
       } else {
         await create.mutateAsync({
@@ -610,15 +817,26 @@ export function PackageDialog({
           titleAr: titleAr || undefined,
           description: description || undefined,
           price: priceValue,
-          partIds,
+          partIds: packagePartIds(partIds, parts),
         });
       }
 
       toast.success(pkg ? 'Package updated' : 'Package created');
       onClose();
     } catch (error) {
+      // Back to the form, where a refusal of the contents is shown in place.
+      setStep('edit');
       toast.error(error, 'The package was not saved');
     }
+  }
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (needsConfirmation && step === 'edit') {
+      setStep('confirm');
+      return;
+    }
+    void save();
   };
 
   const toggle = (id: string) =>
@@ -626,130 +844,242 @@ export function PackageDialog({
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
     );
 
-  const valid = title.trim().length >= 2 && price !== '' && partIds.length > 0;
+  const valid =
+    title.trim().length >= 2 && price !== '' && packagePartIds(partIds, parts).length > 0;
+  const shownInline = ['title', 'price', 'description', 'partIds'].some((key) => errors[key]);
 
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title={pkg ? 'Edit package' : 'New package'}
-      description="Several documents at one price."
+      title={
+        step === 'confirm'
+          ? 'Remove documents from this package?'
+          : pkg
+            ? 'Edit package'
+            : 'New package'
+      }
+      description={step === 'confirm' ? undefined : 'Several documents at one price.'}
       size="lg"
       busy={pending}
       footer={
-        <>
-          <Button variant="secondary" onClick={onClose} disabled={pending}>
-            Cancel
-          </Button>
-          <Button type="submit" form="package-form" loading={pending} disabled={!valid}>
-            {pkg ? 'Save changes' : 'Create package'}
-          </Button>
-        </>
+        step === 'confirm' ? (
+          <>
+            <Button variant="secondary" onClick={() => setStep('edit')} disabled={pending}>
+              Back
+            </Button>
+            <Button variant="danger" onClick={() => void save()} loading={pending}>
+              {`Remove ${removalCount} and save`}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="secondary" onClick={onClose} disabled={pending}>
+              Cancel
+            </Button>
+            <Button type="submit" form="package-form" loading={pending} disabled={!valid}>
+              {pkg ? (needsConfirmation ? 'Review removal' : 'Save changes') : 'Create package'}
+            </Button>
+          </>
+        )
       }
     >
-      <form id="package-form" onSubmit={submit} className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Title" required error={errors.title}>
-            {({ id, describedBy, invalid }) => (
-              <TextInput
-                id={id}
-                aria-describedby={describedBy}
-                invalid={invalid}
-                value={title}
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="Full year bundle"
-              />
-            )}
-          </Field>
-
-          <Field label="Price" required error={errors.price}>
-            {({ id, describedBy, invalid }) => (
-              <TextInput
-                id={id}
-                aria-describedby={describedBy}
-                invalid={invalid}
-                type="number"
-                min="0"
-                step="0.01"
-                value={price}
-                onChange={(event) => setPrice(event.target.value)}
-                trailing={<span className="text-xs">EGP</span>}
-              />
-            )}
-          </Field>
-        </div>
-
-        <Field label="Description" error={errors.description}>
-          {({ id, describedBy }) => (
-            <TextArea
-              id={id}
-              aria-describedby={describedBy}
-              rows={2}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          )}
-        </Field>
-
-        <fieldset className="space-y-2">
-          <legend className="text-sm font-medium text-foreground">Documents included</legend>
-
-          {parts.length === 0 ? (
-            <p className="text-sm text-muted">Add documents to this material first.</p>
-          ) : (
-            <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border p-3">
-              {parts.map((part) => (
-                <div key={part.id} className="flex items-center justify-between gap-3">
-                  <Checkbox
-                    label={part.title}
-                    checked={partIds.includes(part.id)}
-                    onChange={() => toggle(part.id)}
-                  />
-                  <span className="shrink-0 text-xs tabular-nums text-muted">
-                    {formatMoney(part.price)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </fieldset>
-
-        {partIds.length > 0 && price !== '' ? (
-          <div className="rounded-lg border border-border bg-surface-alt px-4 py-3 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted">Bought separately</span>
-              <span className="tabular-nums">{formatMoney(separately)}</span>
-            </div>
-            <div className="mt-1 flex items-center justify-between font-medium">
-              <span>As a package</span>
-              <span className="tabular-nums">{formatMoney(priceValue)}</span>
-            </div>
-            <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
-              <span className="text-muted">Student saves</span>
-              {saving > 0 ? (
-                <Badge tone="success">{formatMoney(saving)}</Badge>
-              ) : (
-                <Badge tone="warning">
-                  {saving === 0 ? 'Nothing' : `${formatMoney(-saving)} more`}
-                </Badge>
+      {step === 'confirm' ? (
+        <PackageRemovalReview removals={removals} />
+      ) : (
+        <form id="package-form" onSubmit={submit} className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Title" required error={errors.title}>
+              {({ id, describedBy, invalid }) => (
+                <TextInput
+                  id={id}
+                  aria-describedby={describedBy}
+                  invalid={invalid}
+                  value={title}
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="Full year bundle"
+                />
               )}
-            </div>
+            </Field>
+
+            <Field label="Price" required error={errors.price}>
+              {({ id, describedBy, invalid }) => (
+                <TextInput
+                  id={id}
+                  aria-describedby={describedBy}
+                  invalid={invalid}
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={price}
+                  onChange={(event) => setPrice(event.target.value)}
+                  trailing={<span className="text-xs">EGP</span>}
+                />
+              )}
+            </Field>
           </div>
-        ) : null}
 
-        {pkg ? (
-          <p className="text-xs text-muted">
-            Changing the contents affects future purchases only. Everyone who already
-            bought holds entitlements to the documents it contained on that day.
-          </p>
-        ) : null}
+          <Field label="Description" error={errors.description}>
+            {({ id, describedBy }) => (
+              <TextArea
+                id={id}
+                aria-describedby={describedBy}
+                rows={2}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+              />
+            )}
+          </Field>
 
-        {(create.error ?? update.error) && Object.keys(errors).length === 0 ? (
-          <p role="alert" className="text-sm font-medium text-danger">
-            {messageFor(create.error ?? update.error)}
-          </p>
-        ) : null}
-      </form>
+          <fieldset className="space-y-2" aria-describedby="package-parts-hint">
+            <legend className="text-sm font-medium text-foreground">Documents included</legend>
+            <p id="package-parts-hint" className="text-xs text-muted">
+              Only this material&apos;s documents. A package never mixes materials, and one
+              document that is not on sale stops the whole package from being bought.
+            </p>
+
+            {parts.length === 0 ? (
+              <p className="text-sm text-muted">Add documents to this material first.</p>
+            ) : (
+              <div className="max-h-56 space-y-1 overflow-y-auto rounded-lg border border-border p-3">
+                {parts.map((part) => (
+                  <div key={part.id} className="flex items-center justify-between gap-3">
+                    <Checkbox
+                      label={part.title}
+                      checked={partIds.includes(part.id)}
+                      onChange={() => toggle(part.id)}
+                    />
+                    <span className="shrink-0 text-xs tabular-nums text-muted">
+                      {formatMoney(part.price)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {errors.partIds ? (
+              <p role="alert" className="text-sm font-medium text-danger">
+                {errors.partIds.join(' ')}
+              </p>
+            ) : null}
+
+            {pkg && membership.withdrawn.length > 0 ? (
+              <div
+                className="space-y-1 rounded-lg border border-warning/40 px-3 py-2 text-sm"
+                data-testid="package-withdrawn-note"
+              >
+                <p className="font-medium text-warning">
+                  {membership.withdrawn.length === 1
+                    ? 'This package still lists 1 document withdrawn from the material:'
+                    : `This package still lists ${membership.withdrawn.length} documents withdrawn from the material:`}
+                </p>
+                <ul className="list-disc ps-5 text-muted">
+                  {membership.withdrawn.map((id) => (
+                    <li key={id}>
+                      Withdrawn document <span className="font-mono text-xs">{id}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-xs text-muted">
+                  {contentsForUpdate
+                    ? 'Changing the contents removes them: the server accepts only documents the material still has. You will be asked to confirm.'
+                    : 'Editing the title, description or price leaves them exactly as they are.'}
+                </p>
+              </div>
+            ) : null}
+
+            {removals.current.length > 0 ? (
+              <p className="text-sm text-warning" data-testid="package-removal-warning">
+                Leaving this package: {removals.current.map((part) => part.title).join(', ')}.
+                You will be asked to confirm.
+              </p>
+            ) : null}
+          </fieldset>
+
+          {partIds.length > 0 && price !== '' ? (
+            <div className="rounded-lg border border-border bg-surface-alt px-4 py-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted">Bought separately</span>
+                <span className="tabular-nums">{formatMoney(separately)}</span>
+              </div>
+              <div className="mt-1 flex items-center justify-between font-medium">
+                <span>As a package</span>
+                <span className="tabular-nums">{formatMoney(priceValue)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-border pt-2">
+                <span className="text-muted">Student saves</span>
+                {saving > 0 ? (
+                  <Badge tone="success">{formatMoney(saving)}</Badge>
+                ) : (
+                  <Badge tone="warning">
+                    {saving === 0 ? 'Nothing' : `${formatMoney(-saving)} more`}
+                  </Badge>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {pkg ? (
+            <p className="text-xs text-muted">
+              Changing the contents affects future purchases only. Everyone who already bought
+              holds entitlements to the documents it contained on that day.
+            </p>
+          ) : null}
+
+          {mutationError && !shownInline ? (
+            <p role="alert" className="text-sm font-medium text-danger">
+              {Object.keys(errors).length > 0
+                ? describeFieldErrors(errors)
+                : messageFor(mutationError)}
+            </p>
+          ) : null}
+        </form>
+      )}
     </Modal>
+  );
+}
+
+/**
+ * Which documents a contents change takes out, and what that does NOT do.
+ *
+ * A purchase writes one entitlement per document, so nothing here reaches a
+ * student who already paid: removing a document from a package only changes
+ * what the package includes for the next buyer.
+ */
+function PackageRemovalReview({ removals }: { removals: ReturnType<typeof packageRemovals> }) {
+  return (
+    <div className="space-y-4" data-testid="package-removal-review">
+      <div className="rounded-lg border border-border p-3">
+        <p className="mb-2 text-sm font-medium text-foreground">
+          These documents will no longer be part of this package:
+        </p>
+        <ul className="list-disc space-y-1 ps-5 text-sm">
+          {removals.current.map((part) => (
+            <li key={part.id}>{part.title}</li>
+          ))}
+          {removals.withdrawn.map((id) => (
+            <li key={id} className="text-muted">
+              Withdrawn document <span className="font-mono text-xs">{id}</span> — already
+              removed from the material; its title is no longer available
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <ul className="list-disc space-y-1 ps-5 text-sm text-muted">
+        <li>
+          <strong className="text-foreground">No purchase or entitlement changes.</strong>{' '}
+          Students who already bought this package, or any of these documents, keep them — each
+          document was granted to them individually.
+        </li>
+        <li>From now on, buying this package no longer includes them.</li>
+        {removals.withdrawn.length > 0 ? (
+          <li>
+            A withdrawn document cannot stay in a package whose contents change: the server only
+            accepts documents the material still has.
+          </li>
+        ) : null}
+      </ul>
+    </div>
   );
 }

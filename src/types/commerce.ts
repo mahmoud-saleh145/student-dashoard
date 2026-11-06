@@ -1,4 +1,5 @@
 import type {
+  AcademicStructureKind,
   AccountStatus,
   ContentStatus,
   EnrollmentState,
@@ -445,6 +446,36 @@ export interface CoursePartPurchaseTotals {
 // Library — the only place wallet credit is spent
 // ---------------------------------------------------------------------------
 
+/**
+ * Who a Library material is for, inside its college.
+ *
+ * FACULTY reaches every department of the college; DEPARTMENTS reaches only
+ * the departments listed on the material. Mirrors the backend's
+ * `LibraryDepartmentScope` enum exactly.
+ */
+export const LIBRARY_DEPARTMENT_SCOPES = ['FACULTY', 'DEPARTMENTS'] as const;
+export type LibraryDepartmentScope = (typeof LIBRARY_DEPARTMENT_SCOPES)[number];
+
+/** A catalogue unit as the admin material read names it. */
+export interface LibraryAudienceRef {
+  id: string;
+  name: string;
+  nameAr: string | null;
+}
+
+/**
+ * The saved audience, with names, as `GET admin/library/materials/:id` returns
+ * it. `university`/`faculty` are null only on a legacy row created before the
+ * audience was required.
+ */
+export interface LibraryMaterialAudience {
+  university: LibraryAudienceRef | null;
+  faculty: LibraryAudienceRef | null;
+  departmentScope: LibraryDepartmentScope;
+  departments: (LibraryAudienceRef & { studyType: 'GENERAL' | 'PROGRAMS' })[];
+  academicYear: (LibraryAudienceRef & { kind: AcademicStructureKind }) | null;
+}
+
 export interface LibraryMaterialRow {
   id: string;
   title: string;
@@ -453,6 +484,11 @@ export interface LibraryMaterialRow {
   isActive: boolean;
   sortOrder: number;
   subject: { id: string; name: string } | null;
+  /** The material's college. Optional: absent from a pre-audience backend. */
+  faculty?: LibraryAudienceRef | null;
+  departmentScope?: LibraryDepartmentScope;
+  /** How many departments a DEPARTMENTS-scoped material lists. */
+  departmentCount?: number;
   partCount: number;
   packageCount: number;
   createdBy: ActorRef | null;
@@ -511,23 +547,45 @@ export interface LibraryMaterialDetail {
   facultyId: string | null;
   academicYearId: string | null;
   subjectId: string | null;
+  /** Optional on the type only so a pre-audience backend still renders. */
+  departmentScope?: LibraryDepartmentScope;
+  departmentIds?: string[];
+  audience?: LibraryMaterialAudience;
   coverUrl: string | null;
   parts: LibraryPartRow[];
   packages: LibraryPackageRow[];
 }
 
-export interface CreateMaterialInput {
+/**
+ * The audience block, exactly as `CreateMaterialDto`/`UpdateMaterialDto`
+ * accept it. On an update it is all-or-nothing: the backend refuses a body
+ * that carries some of these five keys but not all of them.
+ */
+export interface LibraryAudienceInput {
+  universityId: string;
+  facultyId: string;
+  departmentScope: LibraryDepartmentScope;
+  /** Empty for FACULTY; at least one for DEPARTMENTS. */
+  departmentIds: string[];
+  /** `null` clears the optional year/level browse filter. */
+  academicYearId: string | null;
+}
+
+export interface CreateMaterialInput extends LibraryAudienceInput {
   title: string;
   titleAr?: string;
   description?: string;
-  universityId?: string;
-  facultyId?: string;
-  academicYearId?: string;
   subjectId?: string;
   coverKey?: string;
 }
 
-export interface UpdateMaterialInput extends Partial<CreateMaterialInput> {
+export interface UpdateMaterialInput extends Partial<LibraryAudienceInput> {
+  title?: string;
+  titleAr?: string;
+  description?: string;
+  /** `null` clears the subject; omitted leaves it as it is. */
+  subjectId?: string | null;
+  coverKey?: string;
   status?: ContentStatus;
   isActive?: boolean;
   sortOrder?: number;
@@ -560,7 +618,8 @@ export interface UpdateLibraryPartInput {
 }
 
 export interface CreateLibraryPackageInput {
-  materialId?: string;
+  /** Required: a package belongs to exactly one material, and so do its items. */
+  materialId: string;
   title: string;
   titleAr?: string;
   description?: string;

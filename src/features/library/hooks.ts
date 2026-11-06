@@ -1,9 +1,11 @@
 'use client';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 
+import { useDepartments, useFaculties, useUniversities } from '@/features/catalog/hooks';
 import { api } from '@/lib/api-client';
 import { queryKeys } from '@/lib/query-keys';
+import type { AcademicYear } from '@/types/domain';
 import type {
   CreateLibraryPackageInput,
   CreateLibraryPartInput,
@@ -17,6 +19,14 @@ import type {
   UpdateLibraryPartInput,
   UpdateMaterialInput,
 } from '@/types/commerce';
+
+import {
+  IDLE_LADDER,
+  intersectLadders,
+  ladderScopes,
+  type AudienceDraft,
+  type LadderState,
+} from './audience';
 
 /**
  * The Library.
@@ -67,6 +77,63 @@ function useLibraryMutation<TInput, TResult>(
       await queryClient.invalidateQueries({ queryKey: queryKeys.library.all });
     },
   });
+}
+
+// --- audience ----------------------------------------------------------------
+
+const CATALOG_STALE_TIME = 5 * 60_000;
+
+/**
+ * The year/level rungs valid for an audience.
+ *
+ * Resolved through the same scopes the backend's `checkYearInLadder` uses: the
+ * college for a whole-college material, and each selected department for a
+ * department selection — where only rungs every department's ladder shares are
+ * offered. Each scope is its own cached `catalog/academic-years` request, keyed
+ * exactly as `useAcademicYears` keys it, so the two share a cache.
+ */
+export function useAudienceLadder(draft: AudienceDraft): LadderState {
+  const scopes = ladderScopes(draft);
+  const results = useQueries({
+    queries: scopes.map((scope) => {
+      const id = 'departmentId' in scope ? scope.departmentId : scope.facultyId;
+      return {
+        queryKey: queryKeys.catalog.academicYears(id),
+        queryFn: () => api.get<AcademicYear[]>('catalog/academic-years', { query: scope }),
+        staleTime: CATALOG_STALE_TIME,
+      };
+    }),
+  });
+
+  if (scopes.length === 0) return IDLE_LADDER;
+  // A query whose request failed but whose earlier answer is still cached is
+  // not an error here: the answer it has is still the right one.
+  // One being retried right now is loading, not failed.
+  const failed = results.filter(
+    (result) => result.isError && !result.data && !result.isFetching,
+  );
+  if (failed.length > 0) {
+    return {
+      ...IDLE_LADDER,
+      status: 'error',
+      // Only the scopes that failed are asked again; the others keep their
+      // cached answers, and the draft itself is never touched.
+      retry: () => {
+        for (const result of failed) void result.refetch();
+      },
+    };
+  }
+  if (results.some((result) => !result.data)) return { ...IDLE_LADDER, status: 'loading' };
+  return { status: 'ready', ...intersectLadders(results.map((result) => result.data ?? [])) };
+}
+
+/** Everything the audience editor reads, in one place for the form to share. */
+export function useLibraryAudienceData(draft: AudienceDraft) {
+  const universities = useUniversities();
+  const faculties = useFaculties(draft.universityId || null);
+  const departments = useDepartments(draft.facultyId || null);
+  const ladder = useAudienceLadder(draft);
+  return { universities, faculties, departments, ladder };
 }
 
 // --- materials -------------------------------------------------------------

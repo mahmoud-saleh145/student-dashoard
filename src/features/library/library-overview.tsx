@@ -104,6 +104,30 @@ function MaterialsTab() {
       ),
     },
     {
+      // Who the material is for. A row with no college predates the required
+      // audience and cannot be published until one is set — flagged, not hidden.
+      key: 'audience',
+      header: 'Audience',
+      render: (row) =>
+        row.faculty ? (
+          <div className="min-w-0">
+            <p className="truncate text-foreground" dir="auto">
+              {row.faculty.name}
+            </p>
+            {/* dir="auto": "1 department" must not reorder in a right-to-left page. */}
+            <p className="truncate text-xs text-muted" dir="auto">
+              {row.departmentScope === 'DEPARTMENTS'
+                ? `${row.departmentCount ?? 0} department${row.departmentCount === 1 ? '' : 's'}`
+                : 'Entire college'}
+            </p>
+          </div>
+        ) : row.departmentScope ? (
+          <Badge tone="warning">Not set</Badge>
+        ) : (
+          <span className="text-muted">—</span>
+        ),
+    },
+    {
       key: 'subject',
       header: 'Subject',
       secondary: true,
