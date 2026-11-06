@@ -6,13 +6,26 @@ import { useState } from 'react';
 import { ContentStatusBadge } from '@/components/data/status';
 import { Button } from '@/components/ui/button';
 import { ConfirmDialog } from '@/components/ui/overlay';
-import { Badge, Card, CardBody, CardHeader, PageHeader } from '@/components/ui/primitives';
+import {
+  Badge,
+  Card,
+  CardBody,
+  CardHeader,
+  DescriptionList,
+  PageHeader,
+} from '@/components/ui/primitives';
 import { EmptyState, QueryState, Skeleton } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
+import { fieldErrors } from '@/lib/errors';
 import { formatBytes, formatMoney, formatNumber } from '@/lib/format';
-import type { LibraryPackageRow, LibraryPartRow } from '@/types/commerce';
+import type {
+  LibraryMaterialDetail,
+  LibraryPackageRow,
+  LibraryPartRow,
+} from '@/types/commerce';
 import type { ContentStatus } from '@/types/domain';
 
+import { describeFieldErrors, summarizeSaved } from './audience';
 import { LibraryPartDialog, MaterialDialog, PackageDialog } from './library-dialogs';
 import {
   useLibraryMaterial,
@@ -85,6 +98,65 @@ function publishActionFor(status: ContentStatus, partCount: number): PublishActi
 }
 
 /**
+ * The saved audience, read-only.
+ *
+ * Names come from the admin read's `audience` block, so a department that has
+ * since been deactivated is still named here rather than shown as an id.
+ */
+function AudienceCard({
+  material,
+  onEdit,
+}: {
+  material: LibraryMaterialDetail;
+  onEdit: () => void;
+}) {
+  const summary = summarizeSaved(material.audience);
+  const unset = !material.universityId || !material.facultyId;
+
+  return (
+    <Card>
+      <CardHeader
+        title="Audience"
+        description="Who can find and buy this material. The year/level is a browse filter only."
+        actions={
+          <Button size="sm" variant="secondary" onClick={onEdit}>
+            Change audience
+          </Button>
+        }
+      />
+      <CardBody>
+        <div className="space-y-3" data-testid="material-audience">
+          {unset ? (
+            <p role="note" className="text-sm font-medium text-warning">
+              No audience set. This material was created before one was required and cannot be
+              published until it names its university and college.
+            </p>
+          ) : null}
+          <DescriptionList
+            columns={3}
+            items={[
+              { label: 'University', value: summary.university },
+              { label: 'College', value: summary.college },
+              { label: 'Reaches', value: summary.reach },
+              ...(material.departmentScope === 'DEPARTMENTS'
+                ? [
+                    {
+                      label: 'Departments',
+                      value:
+                        summary.departments.length > 0 ? summary.departments.join(', ') : '—',
+                    },
+                  ]
+                : []),
+              { label: 'Year / level', value: summary.yearLevel },
+            ]}
+          />
+        </div>
+      </CardBody>
+    </Card>
+  );
+}
+
+/**
  * One material, with its documents and packages.
  *
  * Documents carry their own absolute price; there is no whole-material price
@@ -135,7 +207,20 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
       await updateMaterial.mutateAsync({ status: action.status });
       toast.success(action.successTitle, action.successBody);
     } catch (error) {
-      toast.error(error, 'The material status was not changed');
+      // Publishing re-validates the SAVED audience on the server, so a legacy
+      // material with no college or a rung from the wrong ladder is refused
+      // here. "Check the highlighted fields" would point at nothing on this
+      // screen; say which field, and where to fix it.
+      const fields = fieldErrors(error);
+      if (Object.keys(fields).length > 0) {
+        toast.push({
+          tone: 'error',
+          title: 'The material status was not changed',
+          description: `${describeFieldErrors(fields)}. Edit the material to fix its audience.`,
+        });
+      } else {
+        toast.error(error, 'The material status was not changed');
+      }
     } finally {
       setPendingPublish(null);
     }
@@ -225,6 +310,8 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
                 </div>
               </CardBody>
             </Card>
+
+            <AudienceCard material={data} onEdit={() => setEditingMaterial(true)} />
 
             <Card>
               <CardHeader
