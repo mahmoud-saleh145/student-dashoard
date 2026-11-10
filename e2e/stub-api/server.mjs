@@ -123,6 +123,13 @@ const control = {
   nextAttachmentId: 1,
   /** Library material status, mutated by PATCH so publishing is a real round trip. */
   materialStatus: 'PUBLISHED',
+  /**
+   * The material's cover key, mutated by PATCH, so the cover is a real round
+   * trip too: upload, register, re-read, render. `null` is "no cover".
+   */
+  materialCoverKey: null,
+  /** What `GET /admin/users` was last asked for (the search box's commit). */
+  lastUsersQuery: null,
   // Arms the next transcode to fail, so the FAILED + retry path is testable.
   failProcessing: false,
   /**
@@ -1137,6 +1144,23 @@ function normalisePhone(value) {
 
 // --- server -----------------------------------------------------------------
 
+/** The material as its current status and cover make it. */
+function materialDetailNow() {
+  const key = control.materialCoverKey;
+  return {
+    ...LIBRARY_MATERIAL_DETAIL,
+    status: control.materialStatus,
+    hasCover: key !== null,
+    coverUrl: key ? `http://127.0.0.1:${PORT}/api/v1/assets/${key}` : null,
+  };
+}
+
+/** A valid 1×1 transparent PNG. */
+const ONE_PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`);
   const path = url.pathname.replace(/^\/api\/v1/, '') || '/';
@@ -1190,11 +1214,20 @@ const server = createServer(async (req, res) => {
     if (path === '/__test__/last-material-patch') {
       return ok(res, lastRequest.materialPatch ?? {});
     }
+    if (path === '/__test__/last-users-query') {
+      return ok(res, control.lastUsersQuery ?? {});
+    }
+    if (path === '/__test__/set-material-cover') {
+      control.materialCoverKey = url.searchParams.get('key') || null;
+      return ok(res, { coverKey: control.materialCoverKey });
+    }
     if (path === '/__test__/reset') {
       control.failUpload = false;
       control.failUploadAfterCommit = false;
       control.storedObjects.clear();
       control.materialStatus = 'PUBLISHED';
+      control.materialCoverKey = null;
+      control.lastUsersQuery = null;
       lastRequest.materialPatch = null;
       control.failProcessing = false;
       control.videos.clear();
@@ -1321,6 +1354,19 @@ const server = createServer(async (req, res) => {
 
     res.writeHead(405, cors);
     return res.end();
+  }
+
+  // Public images, as the real API's `GET /assets/<key>` serves them: a real
+  // PNG, so a test can assert the browser decoded it rather than only that an
+  // <img> has a src.
+  if (path.startsWith('/assets/') && method === 'GET') {
+    res.writeHead(200, {
+      'content-type': 'image/png',
+      'content-length': ONE_PIXEL_PNG.length,
+      'cache-control': 'public, max-age=31536000, immutable',
+      'cross-origin-resource-policy': 'cross-origin',
+    });
+    return res.end(ONE_PIXEL_PNG);
   }
 
   // --- login (unauthenticated) --------------------------------------------
@@ -1664,6 +1710,28 @@ const server = createServer(async (req, res) => {
       res,
       [...control.attachments.values()].filter((row) => row.sectionId === sectionId),
     );
+  }
+
+  // The material cover, streamed through the dashboard's own origin exactly
+  // like a part thumbnail. The server names the key under the material's own
+  // namespace — `thumbnails/library/<materialId>/cover/…` — which is what the
+  // real API holds `coverKey` to.
+  if (path === '/storage/uploads/library-cover/content' && method === 'POST') {
+    let sizeBytes = 0;
+    await new Promise((resolve) => {
+      req.on('data', (chunk) => {
+        sizeBytes += chunk.length;
+      });
+      req.on('end', resolve);
+      req.on('error', resolve);
+    });
+    if (control.failUpload) {
+      return fail(res, 502, 'UPLOAD_FAILED', 'Storage refused the upload.');
+    }
+    const materialId = url.searchParams.get('materialId') ?? 'unknown';
+    const contentType = url.searchParams.get('contentType') ?? '';
+    const ext = contentType === 'image/png' ? '.png' : contentType === 'image/webp' ? '.webp' : '.jpg';
+    return ok(res, { objectKey: `thumbnails/library/${materialId}/cover/stub${ext}`, sizeBytes });
   }
 
   if (path === '/storage/uploads/library-document/content' && method === 'POST') {
@@ -2296,15 +2364,16 @@ const server = createServer(async (req, res) => {
   if (materialDetail && method === 'PATCH') {
     const body = await readBody(req);
     lastRequest.materialPatch = body;
-    // Only `status` is modelled here; the real service persists the whole
-    // patch. What matters for these tests is that the status the dashboard
-    // sent is the status the next read returns.
+    // Only `status` and `coverKey` are modelled here; the real service
+    // persists the whole patch. What matters for these tests is that what the
+    // dashboard sent is what the next read returns.
     if (body.status) control.materialStatus = body.status;
-    return ok(res, { ...LIBRARY_MATERIAL_DETAIL, status: control.materialStatus });
+    if ('coverKey' in body) control.materialCoverKey = body.coverKey ?? null;
+    return ok(res, materialDetailNow());
   }
 
   if (/^\/admin\/library\/materials\/[^/]+(\/parts)?$/.test(path)) {
-    return ok(res, { ...LIBRARY_MATERIAL_DETAIL, status: control.materialStatus });
+    return ok(res, materialDetailNow());
   }
   if (/^\/admin\/library\/(parts|packages)(\/[^/]+)?$/.test(path)) {
     return ok(res, LIBRARY_MATERIAL_DETAIL);
@@ -2368,6 +2437,7 @@ const server = createServer(async (req, res) => {
   if (path === '/admin/codes') return page(res, CODES);
   if (path === '/admin/code-batches') return page(res, CODE_BATCHES);
   if (path === '/admin/users') {
+    control.lastUsersQuery = Object.fromEntries(url.searchParams.entries());
     return page(
       res,
       [

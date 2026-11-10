@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Select, TextInput, type SelectOption } from '@/components/ui/field';
@@ -14,6 +14,25 @@ import { cn } from '@/lib/utils';
  * and short enough that it does not feel laggy.
  */
 
+export const SEARCH_DEBOUNCE_MS = 350;
+
+/**
+ * The search box.
+ *
+ * Two values, deliberately kept apart: what the person is typing (`draft`,
+ * owned here) and what the list is filtered by (`value`, the committed query
+ * the page owns and keeps in the URL). The draft is committed after a pause
+ * in typing; the committed value flows back only when something OTHER than
+ * this box changed it.
+ *
+ * That last rule is what used to be missing. The box re-adopted `value` on
+ * every change, including the echo of its own commit — and because the commit
+ * reached the URL through an asynchronous navigation, the echo arrived after
+ * the person had typed more, and overwrote it. "Students" typed quickly came
+ * back as "Stud". So a commit is remembered, and an incoming `value` equal to
+ * the last commit is ignored; anything else (Clear, Back, a filter that reset
+ * the query, a URL pasted by a colleague) is adopted as before.
+ */
 export function SearchInput({
   value,
   onChange,
@@ -28,16 +47,34 @@ export function SearchInput({
   label?: string;
 }) {
   const [draft, setDraft] = useState(value);
+  const lastCommitted = useRef(value);
 
-  // Keeps the field in step when the query is reset from outside (Clear all,
-  // or a filter change that resets the page).
-  useEffect(() => setDraft(value), [value]);
+  // The latest handler, read when the timer fires. The page re-creates
+  // `onChange` on every render (each fetch state change is a render), and a
+  // handler in the effect's dependencies would restart the debounce on each
+  // of them — so a list that is busy refetching could postpone the commit
+  // indefinitely while the person waits.
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  // An outside change to the committed query: adopt it. Our own commit coming
+  // back is not an outside change, and must never touch the draft.
+  useEffect(() => {
+    if (value === lastCommitted.current) return;
+    lastCommitted.current = value;
+    setDraft(value);
+  }, [value]);
 
   useEffect(() => {
-    if (draft === value) return;
-    const timer = setTimeout(() => onChange(draft), 350);
+    if (draft === lastCommitted.current) return;
+    const timer = setTimeout(() => {
+      lastCommitted.current = draft;
+      onChangeRef.current(draft);
+    }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [draft, value, onChange]);
+  }, [draft]);
 
   return (
     <TextInput

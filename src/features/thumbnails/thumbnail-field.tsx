@@ -107,7 +107,7 @@ export function ThumbnailField({
               </div>
             </>
           ) : upload.phase === 'error' ? (
-            <p className="text-sm text-danger" role="alert">
+            <p className="text-sm text-danger" role="alert" data-testid="thumbnail-error">
               {upload.error}
             </p>
           ) : chosen ? (

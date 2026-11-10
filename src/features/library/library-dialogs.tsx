@@ -90,6 +90,14 @@ export function MaterialDialog({
   const saved = useMemo(() => audienceFromMaterial(material), [material]);
   const data = useLibraryAudienceData(audience);
 
+  // The cover. Edit-only, like the course image: the upload route files the
+  // object under the material's id, which does not exist until it is saved.
+  const cover = useThumbnailUpload({
+    kind: 'library-cover',
+    materialId: material?.id ?? 'unsaved',
+  });
+  const [clearCover, setClearCover] = useState(false);
+
   useEffect(() => {
     if (!open) return;
     setTitle(material?.title ?? '');
@@ -98,12 +106,14 @@ export function MaterialDialog({
     setSubjectId(material?.subjectId ?? '');
     setAudience(audienceFromMaterial(material));
     setStep('edit');
+    cover.reset();
+    setClearCover(false);
     create.reset();
     update.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, material?.id]);
 
-  const pending = create.isPending || update.isPending;
+  const pending = create.isPending || update.isPending || cover.phase === 'uploading';
   const mutationError = create.error ?? update.error;
   const errors = fieldErrors(mutationError);
 
@@ -111,6 +121,13 @@ export function MaterialDialog({
   const edit = material
     ? updateMaterialBody(scalars, audience, saved, material.subjectId)
     : null;
+  // Omitted leaves the cover alone; a new key replaces it; null removes it.
+  // The backend deletes the previous object once the row has moved.
+  const coverPatch = cover.objectKey
+    ? { coverKey: cover.objectKey }
+    : clearCover
+      ? { coverKey: null }
+      : {};
   // Creating always sends the audience; editing sends it only when it moved.
   const sendsAudience = !material || Boolean(edit?.audienceChanged);
 
@@ -136,7 +153,7 @@ export function MaterialDialog({
 
   async function save() {
     try {
-      if (material && edit) await update.mutateAsync(edit.body);
+      if (material && edit) await update.mutateAsync({ ...edit.body, ...coverPatch });
       else await create.mutateAsync(createMaterialBody(scalars, audience));
 
       toast.success(
@@ -300,6 +317,30 @@ export function MaterialDialog({
               />
             )}
           </Field>
+
+          {/* Cover. Edit-only: the upload route files the image under the
+              material's id, which a material being created does not have yet. */}
+          <ThumbnailField
+            upload={cover}
+            label="Cover image"
+            currentUrl={clearCover ? null : (material?.coverUrl ?? null)}
+            inheritedFrom={
+              material?.hasCover || material?.coverUrl
+                ? undefined
+                : 'the library default for its documents'
+            }
+            onClear={
+              material?.coverUrl && !clearCover
+                ? () => {
+                    setClearCover(true);
+                    cover.reset();
+                  }
+                : undefined
+            }
+            disabledReason={
+              material ? undefined : 'Create the material first, then add its cover image.'
+            }
+          />
 
           {legacyAudience ? (
             <p role="note" className="rounded-lg bg-surface-alt px-3 py-2 text-sm text-warning">

@@ -9,13 +9,15 @@ import type { LibraryDepartmentScope, LibraryMaterialAudience } from '@/types/co
 import type { Department } from '@/types/domain';
 
 import {
+  clearAcademicYears,
   collegeTracks,
   ladderLabel,
-  selectAcademicYear,
+  savedAcademicYears,
   selectFaculty,
   selectScope,
   selectUniversity,
   selectionTrack,
+  toggleAcademicYear,
   toggleDepartment,
   trackName,
   trackOfDepartment,
@@ -95,16 +97,19 @@ export function LibraryAudienceEditor({
     'no longer active',
   );
 
-  const yearOptions = withUnavailable(
-    ladder.entries.map((entry) => ({ value: entry.id, label: entry.name })),
-    value.academicYearId,
-    ladder.status === 'ready' ? 'loaded' : ladder.status === 'error' ? 'error' : 'loading',
-    rungNames[value.academicYearId] ??
-      (saved?.academicYear?.id === value.academicYearId
-        ? saved?.academicYear?.name
-        : undefined),
-    'not in this ladder',
-  );
+  // Ticked rungs the current ladder does not list: saved under another
+  // audience, or a ladder that is still loading. Named from what was seen
+  // before, then from the saved material, so they never read as bare ids.
+  const unavailableYears = value.academicYearIds
+    .filter((id) => !ladder.entries.some((entry) => entry.id === id))
+    .map((id) => ({
+      id,
+      name:
+        rungNames[id] ??
+        savedAcademicYears(saved).find((year) => year.id === id)?.name ??
+        'Unavailable',
+    }));
+  const yearsReady = ladder.status === 'ready';
 
   const list = departments ?? [];
   const track = selectionTrack(list, value.departmentIds);
@@ -264,34 +269,84 @@ export function LibraryAudienceEditor({
       ) : null}
 
       <Field
-        label={`${ladderLabel(ladder.kind)} (optional)`}
-        hint="A browse filter students can use to narrow the list. It never decides who can see or buy the material."
-        error={errors.academicYearId}
+        label={`${ladderLabel(ladder.kind)}s (optional)`}
+        hint="A browse filter students can use to narrow the list. Tick every year/level this material is for; none ticked means all years. It never decides who can see or buy the material."
+        error={errors.academicYearIds}
       >
         {({ id, describedBy, invalid }) => (
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <Select
-                id={id}
-                aria-describedby={describedBy}
-                invalid={invalid}
-                value={value.academicYearId}
-                disabled={disabled || ladder.status !== 'ready'}
-                placeholder={yearPlaceholder(value, ladder)}
-                options={yearOptions}
-                onChange={(event) => onChange(selectAcademicYear(value, event.target.value))}
-              />
-            </div>
-            {value.academicYearId ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={disabled}
-                onClick={() => onChange(selectAcademicYear(value, ''))}
+          <div
+            id={id}
+            role="group"
+            aria-label={`${ladderLabel(ladder.kind)}s`}
+            aria-describedby={describedBy}
+            data-testid="academic-years"
+            className={
+              invalid
+                ? 'space-y-3 rounded-lg border border-danger p-3'
+                : 'space-y-3 rounded-lg border border-border p-3'
+            }
+          >
+            {!yearsReady || (ladder.entries.length === 0 && unavailableYears.length === 0) ? (
+              <p className="text-sm text-muted">{yearPlaceholder(value, ladder)}</p>
+            ) : (
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                {ladder.entries.map((entry) => (
+                  <Checkbox
+                    key={entry.id}
+                    label={entry.name}
+                    checked={value.academicYearIds.includes(entry.id)}
+                    disabled={disabled}
+                    onChange={(event) =>
+                      onChange(toggleAcademicYear(value, entry.id, event.target.checked))
+                    }
+                  />
+                ))}
+              </div>
+            )}
+
+            {unavailableYears.length > 0 ? (
+              <div
+                className="space-y-1 rounded-lg border border-warning/40 px-3 py-2"
+                data-testid="unavailable-years"
               >
-                Clear
-              </Button>
+                <p className="text-xs font-medium text-warning">
+                  {yearsReady
+                    ? 'Chosen, but not part of the ladder for this audience:'
+                    : 'Chosen, not verified until the years/levels load:'}
+                </p>
+                {unavailableYears.map((year) => (
+                  <div key={year.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span>{year.name}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={disabled}
+                      onClick={() => onChange(toggleAcademicYear(value, year.id, false))}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
             ) : null}
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted" data-testid="academic-years-summary">
+                {value.academicYearIds.length === 0
+                  ? 'Any — no year/level filter'
+                  : `${value.academicYearIds.length} selected`}
+              </p>
+              {value.academicYearIds.length > 0 ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={disabled}
+                  onClick={() => onChange(clearAcademicYears(value))}
+                >
+                  Clear years
+                </Button>
+              ) : null}
+            </div>
           </div>
         )}
       </Field>

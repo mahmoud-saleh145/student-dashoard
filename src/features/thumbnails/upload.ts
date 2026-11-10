@@ -32,6 +32,7 @@ export const THUMBNAIL_MAX_BYTES = 10 * 1024 * 1024;
 export type ThumbnailTarget =
   | { kind: 'course'; courseId: string }
   | { kind: 'course-part'; courseId: string; partId: string }
+  | { kind: 'library-cover'; materialId: string }
   | { kind: 'library-part'; materialId: string; partId: string }
   | { kind: 'library-default' };
 
@@ -85,6 +86,11 @@ function routeFor(target: ThumbnailTarget): { path: string; query: URLSearchPara
       return {
         path: '/api/upload/course-part-thumbnail',
         query: new URLSearchParams({ courseId: target.courseId, partId: target.partId }),
+      };
+    case 'library-cover':
+      return {
+        path: '/api/upload/library-cover',
+        query: new URLSearchParams({ materialId: target.materialId }),
       };
     case 'library-part':
       return {
