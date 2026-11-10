@@ -80,9 +80,30 @@ export function useListQuery(options: UseListQueryOptions = {}): UseListQueryRes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, defaultPageSize, filterKeys.join(','), options.defaultSort?.key, options.defaultSort?.direction]);
 
+  /**
+   * Writes list state to the address bar.
+   *
+   * Through `window.history.replaceState`, which the App Router folds into
+   * `useSearchParams` without a server round trip — NOT `router.replace`.
+   * `router.replace` is a navigation: it fetches the route's server payload
+   * before the new search params are visible to React, and on a slow
+   * connection that is hundreds of milliseconds during which the old `q` is
+   * still what every consumer reads. The search box used to re-sync its text
+   * from that stale value when the navigation finally landed, which is what
+   * ate characters typed in the meantime. A synchronous URL write closes the
+   * window; the search box's own guard (`SearchInput`) covers whatever is
+   * left.
+   *
+   * The base is read from `window.location` at call time rather than from the
+   * `searchParams` this render saw, so two writes in one tick (a page reset
+   * following a filter change) compose instead of the second discarding the
+   * first.
+   */
   const apply = useCallback(
     (changes: Record<string, string | number | null>, resetPage: boolean) => {
-      const next = new URLSearchParams(searchParams.toString());
+      const next = new URLSearchParams(
+        typeof window === 'undefined' ? searchParams.toString() : window.location.search,
+      );
 
       for (const [key, value] of Object.entries(changes)) {
         if (value === null || value === '') next.delete(key);
@@ -91,9 +112,20 @@ export function useListQuery(options: UseListQueryOptions = {}): UseListQueryRes
 
       if (resetPage) next.delete('page');
 
-      // `scroll: false` keeps the viewport where it is: paging a long table
-      // should not throw the reader back to the top of the page.
-      router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+      const query = next.toString();
+      const url = query ? `${pathname}?${query}` : pathname;
+
+      if (typeof window === 'undefined') {
+        router.replace(url, { scroll: false });
+        return;
+      }
+      // replaceState never scrolls, which is what paging a long table wants.
+      // The state argument is deliberately `null`: the App Router treats a
+      // call that re-sends its own internal state object as one of its own
+      // navigations and does NOT sync `useSearchParams` for it. A null state
+      // is recognised as external, the router copies its internals onto it
+      // and dispatches the URL to every consumer.
+      window.history.replaceState(null, '', url);
     },
     [router, pathname, searchParams],
   );

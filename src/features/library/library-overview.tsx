@@ -18,11 +18,13 @@ import {
   asDate,
   exportFilename,
 } from '@/lib/export-excel';
+import { useAcademicStructures } from '@/features/catalog/hooks';
 import { endOfDayIso, formatDateTime, formatMoney, formatPhone, startOfDayIso } from '@/lib/format';
 import { useListQuery } from '@/lib/use-list-query';
 import { CONTENT_STATUSES } from '@/types/domain';
 import type { LibraryMaterialRow, LibraryPurchaseRow } from '@/types/commerce';
 
+import { describeYears } from './audience';
 import { MaterialDialog } from './library-dialogs';
 import { useLibraryMaterials, useLibraryPurchases } from './hooks';
 
@@ -70,8 +72,28 @@ export function LibraryOverview() {
 }
 
 function MaterialsTab() {
-  const list = useListQuery({ filterKeys: ['status'] });
+  const list = useListQuery({ filterKeys: ['status', 'academicYearId'] });
   const { data, isLoading, error, refetch } = useLibraryMaterials(list.queryParams);
+
+  // Every rung of every ladder, named by its ladder when the ladder is a
+  // college's or department's own, so "Level 100" of one college is not
+  // confused with another's. The filter also returns "all years" materials:
+  // a material filed under no rung is for this one too.
+  const structures = useAcademicStructures();
+  const yearOptions = useMemo(
+    () =>
+      (structures.data ?? [])
+        .filter((structure) => structure.isActive)
+        .flatMap((structure) => {
+          const scope =
+            structure.department?.name ?? structure.faculty?.name ?? structure.university?.name;
+          return structure.entries.map((entry) => ({
+            value: entry.id,
+            label: scope ? `${entry.name} · ${scope}` : entry.name,
+          }));
+        }),
+    [structures.data],
+  );
 
   const columns: Column<LibraryMaterialRow>[] = [
     {
@@ -149,6 +171,20 @@ function MaterialsTab() {
       render: (row) => <span className="tabular-nums">{row.packageCount}</span>,
     },
     {
+      // A browse filter, never eligibility: "Any" reaches every year.
+      key: 'years',
+      header: 'Years / levels',
+      secondary: true,
+      render: (row) =>
+        row.academicYears ? (
+          <span className="text-xs text-muted" dir="auto">
+            {row.academicYears.length === 0 ? 'Any' : describeYears(row.academicYears)}
+          </span>
+        ) : (
+          <span className="text-muted">—</span>
+        ),
+    },
+    {
       key: 'createdAt',
       header: 'Created',
       secondary: true,
@@ -191,6 +227,14 @@ function MaterialsTab() {
             options={CONTENT_STATUSES.map((status) => ({ value: status, label: status }))}
             placeholder="Any status"
             label="Filter by status"
+          />
+          <FilterSelect
+            value={list.filters.academicYearId ?? ''}
+            onChange={(value) => list.setFilter('academicYearId', value)}
+            options={yearOptions}
+            placeholder="Any year / level"
+            label="Filter by year or level"
+            className="sm:w-60"
           />
         </FilterBar>
       }

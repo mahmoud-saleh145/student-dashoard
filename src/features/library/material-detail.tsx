@@ -295,6 +295,20 @@ export function MaterialDetail({ materialId }: { materialId: string }) {
             <Card>
               <CardBody>
                 <div className="flex flex-wrap items-center gap-3">
+                  {/* The cover, as students will see it on every document that
+                      has no image of its own. A plain <img>: the URL is the
+                      API's public asset route, not a statically known asset. */}
+                  <div
+                    className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-alt"
+                    data-testid="material-cover"
+                  >
+                    {data.coverUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={data.coverUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="text-2xs text-subtle">No cover</span>
+                    )}
+                  </div>
                   <ContentStatusBadge status={data.status} />
                   {!data.isActive ? <Badge tone="neutral">Inactive</Badge> : null}
                   <span className="text-sm text-muted">

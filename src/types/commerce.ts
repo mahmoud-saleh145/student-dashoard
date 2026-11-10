@@ -468,12 +468,22 @@ export interface LibraryAudienceRef {
  * it. `university`/`faculty` are null only on a legacy row created before the
  * audience was required.
  */
+/** One rung of a ladder, named, as the admin reads return it. */
+export type LibraryAcademicYearRef = LibraryAudienceRef & { kind: AcademicStructureKind };
+
 export interface LibraryMaterialAudience {
   university: LibraryAudienceRef | null;
   faculty: LibraryAudienceRef | null;
   departmentScope: LibraryDepartmentScope;
   departments: (LibraryAudienceRef & { studyType: 'GENERAL' | 'PROGRAMS' })[];
-  academicYear: (LibraryAudienceRef & { kind: AcademicStructureKind }) | null;
+  /** Legacy single rung: the first of `academicYears`. Kept for older backends. */
+  academicYear: LibraryAcademicYearRef | null;
+  /**
+   * Every year/level the material is filed under, in ladder order. Empty
+   * means "all years". Optional on the type only so a backend that predates
+   * the list still renders (it is then derived from `academicYear`).
+   */
+  academicYears?: LibraryAcademicYearRef[];
 }
 
 export interface LibraryMaterialRow {
@@ -489,6 +499,9 @@ export interface LibraryMaterialRow {
   departmentScope?: LibraryDepartmentScope;
   /** How many departments a DEPARTMENTS-scoped material lists. */
   departmentCount?: number;
+  /** The years/levels it is filed under; empty or absent means all years. */
+  academicYears?: LibraryAcademicYearRef[];
+  hasCover?: boolean;
   partCount: number;
   packageCount: number;
   createdBy: ActorRef | null;
@@ -545,12 +558,17 @@ export interface LibraryMaterialDetail {
   sortOrder: number;
   universityId: string | null;
   facultyId: string | null;
+  /** Legacy single rung: the first of `academicYearIds`. */
   academicYearId: string | null;
+  /** Every rung the material is filed under; absent from a backend that predates the list. */
+  academicYearIds?: string[];
   subjectId: string | null;
   /** Optional on the type only so a pre-audience backend still renders. */
   departmentScope?: LibraryDepartmentScope;
   departmentIds?: string[];
   audience?: LibraryMaterialAudience;
+  /** Whether a cover of its own is set; the key itself is never sent. */
+  hasCover?: boolean;
   coverUrl: string | null;
   parts: LibraryPartRow[];
   packages: LibraryPackageRow[];
@@ -559,7 +577,9 @@ export interface LibraryMaterialDetail {
 /**
  * The audience block, exactly as `CreateMaterialDto`/`UpdateMaterialDto`
  * accept it. On an update it is all-or-nothing: the backend refuses a body
- * that carries some of these five keys but not all of them.
+ * that carries some of these keys but not all of them. The years go in both
+ * spellings — the list, and the legacy single id as its first entry (or
+ * `null`) — so a backend of either generation reads the same audience.
  */
 export interface LibraryAudienceInput {
   universityId: string;
@@ -569,6 +589,8 @@ export interface LibraryAudienceInput {
   departmentIds: string[];
   /** `null` clears the optional year/level browse filter. */
   academicYearId: string | null;
+  /** Every rung; empty means all years. */
+  academicYearIds: string[];
 }
 
 export interface CreateMaterialInput extends LibraryAudienceInput {
@@ -585,7 +607,8 @@ export interface UpdateMaterialInput extends Partial<LibraryAudienceInput> {
   description?: string;
   /** `null` clears the subject; omitted leaves it as it is. */
   subjectId?: string | null;
-  coverKey?: string;
+  /** A key from the library-cover upload; `null` removes the cover; omitted leaves it. */
+  coverKey?: string | null;
   status?: ContentStatus;
   isActive?: boolean;
   sortOrder?: number;

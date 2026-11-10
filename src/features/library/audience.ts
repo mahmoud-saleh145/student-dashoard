@@ -40,13 +40,14 @@ import type {
 
 export type StudyTrack = 'GENERAL' | 'PROGRAMS';
 
-/** What the form holds. Empty string means "not chosen". */
+/** What the form holds. Empty string / empty list means "not chosen". */
 export interface AudienceDraft {
   universityId: string;
   facultyId: string;
   departmentScope: LibraryDepartmentScope;
   departmentIds: string[];
-  academicYearId: string;
+  /** Every year/level ticked; empty means "all years". */
+  academicYearIds: string[];
 }
 
 export const EMPTY_AUDIENCE: AudienceDraft = Object.freeze({
@@ -54,17 +55,36 @@ export const EMPTY_AUDIENCE: AudienceDraft = Object.freeze({
   facultyId: '',
   departmentScope: 'FACULTY',
   departmentIds: [],
-  academicYearId: '',
+  academicYearIds: [],
 }) as AudienceDraft;
+
+/** More rungs than any ladder has; the backend refuses a longer list. */
+export const MAX_ACADEMIC_YEARS = 20;
+
+/**
+ * The saved years of a material, whichever generation of backend answered:
+ * the list when it is there, else the single legacy rung.
+ */
+export function savedAcademicYearIds(
+  material: Pick<LibraryMaterialDetail, 'academicYearId' | 'academicYearIds'>,
+): string[] {
+  if (material.academicYearIds) return [...new Set(material.academicYearIds)];
+  return material.academicYearId ? [material.academicYearId] : [];
+}
 
 /** The saved audience of a material, as the form starts from it. */
 export function audienceFromMaterial(
   material: Pick<
     LibraryMaterialDetail,
-    'universityId' | 'facultyId' | 'academicYearId' | 'departmentScope' | 'departmentIds'
+    | 'universityId'
+    | 'facultyId'
+    | 'academicYearId'
+    | 'academicYearIds'
+    | 'departmentScope'
+    | 'departmentIds'
   > | null,
 ): AudienceDraft {
-  if (!material) return { ...EMPTY_AUDIENCE, departmentIds: [] };
+  if (!material) return { ...EMPTY_AUDIENCE, departmentIds: [], academicYearIds: [] };
   const departmentScope = material.departmentScope ?? 'FACULTY';
   return {
     universityId: material.universityId ?? '',
@@ -73,7 +93,7 @@ export function audienceFromMaterial(
     // A FACULTY material has no links; anything else would be a stored
     // inconsistency the backend itself refuses to write.
     departmentIds: departmentScope === 'DEPARTMENTS' ? [...(material.departmentIds ?? [])] : [],
-    academicYearId: material.academicYearId ?? '',
+    academicYearIds: savedAcademicYearIds(material),
   };
 }
 
@@ -89,23 +109,23 @@ export function selectUniversity(draft: AudienceDraft, universityId: string): Au
     facultyId: '',
     departmentScope: draft.departmentScope,
     departmentIds: [],
-    academicYearId: '',
+    academicYearIds: [],
   };
 }
 
 /**
- * Departments belong to one college, and the year/level belongs to the
+ * Departments belong to one college, and the years/levels belong to the
  * college's ladder — a different college can count in different rungs.
  */
 export function selectFaculty(draft: AudienceDraft, facultyId: string): AudienceDraft {
   if (facultyId === draft.facultyId) return draft;
-  return { ...draft, facultyId, departmentIds: [], academicYearId: '' };
+  return { ...draft, facultyId, departmentIds: [], academicYearIds: [] };
 }
 
 /**
  * Switching scope never carries department ids across: FACULTY must send none,
- * and a fresh DEPARTMENTS selection starts empty. The year/level is kept and
- * re-checked against the ladder the new scope resolves to.
+ * and a fresh DEPARTMENTS selection starts empty. The years/levels are kept
+ * and re-checked against the ladder the new scope resolves to.
  */
 export function selectScope(
   draft: AudienceDraft,
@@ -130,12 +150,38 @@ export function toggleDepartment(
   };
 }
 
-/** The year/level never changes the college or the departments. */
-export function selectAcademicYear(
+/** A year/level never changes the college or the departments. */
+export function toggleAcademicYear(
   draft: AudienceDraft,
   academicYearId: string,
+  checked: boolean,
 ): AudienceDraft {
-  return academicYearId === draft.academicYearId ? draft : { ...draft, academicYearId };
+  const has = draft.academicYearIds.includes(academicYearId);
+  if (checked === has) return draft;
+  return {
+    ...draft,
+    academicYearIds: checked
+      ? [...draft.academicYearIds, academicYearId]
+      : draft.academicYearIds.filter((id) => id !== academicYearId),
+  };
+}
+
+/** Back to "all years". */
+export function clearAcademicYears(draft: AudienceDraft): AudienceDraft {
+  return draft.academicYearIds.length === 0 ? draft : { ...draft, academicYearIds: [] };
+}
+
+/**
+ * The years in ladder order, for display and for the legacy single id. Ids
+ * the ladder does not list keep their ticked order after the known ones.
+ */
+export function orderedAcademicYearIds(
+  ids: string[],
+  ladder: Pick<AcademicYear, 'id'>[],
+): string[] {
+  const unique = [...new Set(ids)];
+  const known = ladder.map((entry) => entry.id).filter((id) => unique.includes(id));
+  return [...known, ...unique.filter((id) => !known.includes(id))];
 }
 
 // ---------------------------------------------------------------------------
@@ -289,18 +335,27 @@ export function checkAudience(draft: AudienceDraft, ctx: AudienceContext): Audie
     }
   }
 
-  if (draft.academicYearId && !errors.facultyId && !errors.departmentIds) {
+  const years = [...new Set(draft.academicYearIds)];
+  if (years.length > 0 && !errors.facultyId && !errors.departmentIds) {
     const { ladder } = ctx;
-    if (ladder.status === 'loading' || ladder.status === 'idle') {
+    const label = ladderLabel(ladder.kind).toLowerCase();
+    if (years.length > MAX_ACADEMIC_YEARS) {
+      errors.academicYearIds = `Choose at most ${MAX_ACADEMIC_YEARS} ${label}s, or clear them for all.`;
+    } else if (ladder.status === 'loading' || ladder.status === 'idle') {
       pending = true;
     } else if (ladder.status === 'error') {
-      errors.academicYearId =
-        'Cannot be checked until the years/levels load. Retry below, or clear it.';
+      errors.academicYearIds =
+        'Cannot be checked until the years/levels load. Retry below, or clear them.';
     } else if (ladder.conflict) {
-      errors.academicYearId =
-        'The selected departments do not share one ladder, so no year/level fits all of them. Clear it.';
-    } else if (!ladder.entries.some((entry) => entry.id === draft.academicYearId)) {
-      errors.academicYearId = `This ${ladderLabel(ladder.kind).toLowerCase()} is not part of the ladder for this audience. Choose another, or clear it.`;
+      errors.academicYearIds =
+        'The selected departments do not share one ladder, so no year/level fits all of them. Clear them.';
+    } else {
+      const foreign = years.filter((id) => !ladder.entries.some((entry) => entry.id === id));
+      if (foreign.length === 1) {
+        errors.academicYearIds = `One selected ${label} is not part of the ladder for this audience. Remove it.`;
+      } else if (foreign.length > 1) {
+        errors.academicYearIds = `${foreign.length} selected ${label}s are not part of the ladder for this audience. Remove them.`;
+      }
     }
   }
 
@@ -308,32 +363,40 @@ export function checkAudience(draft: AudienceDraft, ctx: AudienceContext): Audie
 }
 
 // ---------------------------------------------------------------------------
-// Payloads — the exact Phase 1 contract
+// Payloads — the exact contract
 // ---------------------------------------------------------------------------
 
-/** All five keys, always. `academicYearId: null` is an explicit clear. */
+/**
+ * Every audience key, always. The years go as the list and, for a backend
+ * that predates it, as the single legacy id — the first ticked rung, or an
+ * explicit `null` for "all years" (the backend re-derives the legacy column
+ * in ladder order whatever is sent here).
+ */
 export function audiencePayload(draft: AudienceDraft): LibraryAudienceInput {
+  const academicYearIds = [...new Set(draft.academicYearIds)];
   return {
     universityId: draft.universityId,
     facultyId: draft.facultyId,
     departmentScope: draft.departmentScope,
     departmentIds:
       draft.departmentScope === 'DEPARTMENTS' ? [...new Set(draft.departmentIds)] : [],
-    academicYearId: draft.academicYearId || null,
+    academicYearId: academicYearIds[0] ?? null,
+    academicYearIds,
   };
 }
 
-/** Same audience, whatever order the departments were ticked in. */
+/** Same audience, whatever order the departments or years were ticked in. */
 export function sameAudience(a: AudienceDraft, b: AudienceDraft): boolean {
   const pa = audiencePayload(a);
   const pb = audiencePayload(b);
+  const sameSet = (x: string[], y: string[]) =>
+    x.length === y.length && x.every((id) => y.includes(id));
   return (
     pa.universityId === pb.universityId &&
     pa.facultyId === pb.facultyId &&
     pa.departmentScope === pb.departmentScope &&
-    (pa.academicYearId ?? '') === (pb.academicYearId ?? '') &&
-    pa.departmentIds.length === pb.departmentIds.length &&
-    pa.departmentIds.every((id) => pb.departmentIds.includes(id))
+    sameSet(pa.academicYearIds, pb.academicYearIds) &&
+    sameSet(pa.departmentIds, pb.departmentIds)
   );
 }
 
@@ -411,11 +474,27 @@ export function reachLabel(scope: LibraryDepartmentScope): string {
     : 'Entire college — every department';
 }
 
+/** The saved years, whichever generation of backend answered. */
+export function savedAcademicYears(
+  audience: LibraryMaterialAudience | undefined | null,
+): { id: string; name: string; kind: AcademicStructureKind }[] {
+  if (audience?.academicYears) return audience.academicYears;
+  return audience?.academicYear ? [audience.academicYear] : [];
+}
+
+/** "Preparatory year, First year (Year)" — one ladder word, not one per rung. */
+export function describeYears(
+  years: { name: string; kind: AcademicStructureKind | null }[],
+): string {
+  if (years.length === 0) return ANY_YEAR;
+  const kind = years[0]?.kind ?? null;
+  return `${years.map((y) => y.name).join(', ')} (${ladderLabel(kind)})`;
+}
+
 export function summarizeSaved(
   audience: LibraryMaterialAudience | undefined | null,
 ): AudienceSummary {
   const scope = audience?.departmentScope ?? 'FACULTY';
-  const year = audience?.academicYear ?? null;
   return {
     university: audience?.university?.name ?? NOT_SET,
     college: audience?.faculty?.name ?? NOT_SET,
@@ -424,7 +503,7 @@ export function summarizeSaved(
       scope === 'DEPARTMENTS'
         ? (audience?.departments ?? []).map((d) => `${d.name} (${trackName(d.studyType)})`)
         : [],
-    yearLevel: year ? `${year.name} (${ladderLabel(year.kind)})` : ANY_YEAR,
+    yearLevel: describeYears(savedAcademicYears(audience)),
   };
 }
 
@@ -439,7 +518,12 @@ export function summarizeDraft(
 ): AudienceSummary {
   const nameOf = (list: { id: string; name: string }[] | undefined, id: string) =>
     id ? (list?.find((item) => item.id === id)?.name ?? 'Unavailable') : NOT_SET;
-  const year = lookup.ladder.entries.find((entry) => entry.id === draft.academicYearId);
+  const years = orderedAcademicYearIds(draft.academicYearIds, lookup.ladder.entries).map(
+    (id) => {
+      const entry = lookup.ladder.entries.find((rung) => rung.id === id);
+      return { name: entry?.name ?? 'Unavailable', kind: lookup.ladder.kind };
+    },
+  );
   return {
     university: nameOf(lookup.universities, draft.universityId),
     college: nameOf(lookup.faculties, draft.facultyId),
@@ -453,11 +537,7 @@ export function summarizeDraft(
               : 'Unavailable department';
           })
         : [],
-    yearLevel: draft.academicYearId
-      ? year
-        ? `${year.name} (${ladderLabel(lookup.ladder.kind)})`
-        : 'Unavailable'
-      : ANY_YEAR,
+    yearLevel: describeYears(years),
   };
 }
 
@@ -481,21 +561,20 @@ export function audienceDiff(
   return rows.map((row) => ({ ...row, changed: row.before !== row.after }));
 }
 
-/** Backend field errors for the five audience keys, ready for the editor. */
+/**
+ * Backend field errors for the audience keys, ready for the editor. A refusal
+ * of the legacy single `academicYearId` lands on the years control too.
+ */
 export function audienceServerErrors(
   fields: Record<string, string[]>,
 ): Partial<Record<AudienceField, string>> {
   const out: Partial<Record<AudienceField, string>> = {};
-  for (const key of [
-    'universityId',
-    'facultyId',
-    'departmentScope',
-    'departmentIds',
-    'academicYearId',
-  ] as const) {
+  for (const key of ['universityId', 'facultyId', 'departmentScope', 'departmentIds'] as const) {
     const messages = fields[key];
     if (messages && messages.length > 0) out[key] = sentence(messages.join('; '));
   }
+  const years = [...(fields.academicYearIds ?? []), ...(fields.academicYearId ?? [])];
+  if (years.length > 0) out.academicYearIds = sentence(years.join('; '));
   return out;
 }
 
@@ -515,6 +594,8 @@ export function describeFieldErrors(fields: Record<string, string[]>): string {
     departmentScope: 'Audience',
     departmentIds: 'Departments',
     academicYearId: 'Year / level',
+    academicYearIds: 'Years / levels',
+    coverKey: 'Cover image',
     partIds: 'Documents',
   };
   return Object.entries(fields)

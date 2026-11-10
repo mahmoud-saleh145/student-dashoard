@@ -115,14 +115,26 @@ export async function handleStreamUpload(
   }
 
   const payload = (await response.json().catch(() => null)) as
-    | { success?: boolean; data?: unknown; error?: { code?: string; message?: string } }
+    | {
+        success?: boolean;
+        data?: unknown;
+        error?: { code?: string; message?: string; fields?: Record<string, string[]> };
+      }
     | null;
 
   if (!response.ok) {
+    // The API puts the reason a file was refused — too large, wrong type —
+    // on a field, not in the message. Fold it in, or the person only ever
+    // reads "The upload was refused." and has nothing to act on.
+    const fieldMessages = Object.values(payload?.error?.fields ?? {})
+      .flat()
+      .filter(Boolean);
+    const detail = fieldMessages.length > 0 ? fieldMessages.join(' ') : undefined;
+    const message = payload?.error?.message ?? 'The upload was refused.';
     return problem(
       response.status,
       payload?.error?.code ?? 'UPLOAD_FAILED',
-      payload?.error?.message ?? 'The upload was refused.',
+      detail && !message.includes(detail) ? `${message} ${detail}` : message,
     );
   }
 
