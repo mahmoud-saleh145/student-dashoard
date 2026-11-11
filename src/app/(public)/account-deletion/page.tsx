@@ -84,8 +84,7 @@ export default async function AccountDeletionPage({
         <Section title="٥. البيانات التي نحتفظ بها">
           <p>
             نحتفظ — بدون هويتك — بالسجلات التي تحتاجها المنصة لأغراض مالية وأمنية ورقابية:
-            الاشتراكات وسجلات التعلّم والبيانات الدراسية والأكواد المستخدمة ومعاملات المحفظة وسجلات
-            المكتبة وسجلات التدقيق. لا تُستخدم إلا لهذه الأغراض. التفاصيل في{' '}
+            الاشتراكات وسجلات التعلّم والبيانات الدراسية والأكواد المستخدمة ومعاملات المحفظة وسجلات المكتبة وسجلات الأمان والتدقيق. لا تُستخدم إلا لهذه الأغراض. التفاصيل في{' '}
             <Link href="/privacy?lang=ar">سياسة الخصوصية</Link>.
           </p>
         </Section>
@@ -155,7 +154,7 @@ export default async function AccountDeletionPage({
         <p>
           We keep, without your identity, the records the platform needs for financial, security
           and audit purposes: enrollments and learning records, academic details, redeemed codes,
-          wallet transactions, library records and audit logs. They are used only for those
+          wallet transactions, library records, and security and audit logs. They are used only for those
           purposes. See the <Link href="/privacy">Privacy Policy</Link> for details.
         </p>
       </Section>

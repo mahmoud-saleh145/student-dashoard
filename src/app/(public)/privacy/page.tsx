@@ -220,7 +220,7 @@ function English() {
         <p>
           We keep, without your identity, the records the platform needs for financial, security
           and audit purposes: enrollments and learning records, academic details, redeemed codes,
-          wallet transactions, library records and audit logs. If wallet credit is left on the
+          wallet transactions, library records, and security and audit logs. If wallet credit is left on the
           account, the deletion waits until the administration has settled it with you.
         </p>
       </Section>
@@ -414,8 +414,7 @@ function Arabic() {
         </ul>
         <p>
           نحتفظ — بدون هويتك — بالسجلات التي تحتاجها المنصة لأغراض مالية وأمنية ورقابية: الاشتراكات
-          وسجلات التعلّم والبيانات الدراسية والأكواد المستخدمة ومعاملات المحفظة وسجلات المكتبة وسجلات
-          التدقيق. وإذا تبقّى رصيد في المحفظة، ينتظر الحذف حتى تُسوّي الإدارة هذا الرصيد معك.
+          وسجلات التعلّم والبيانات الدراسية والأكواد المستخدمة ومعاملات المحفظة وسجلات المكتبة وسجلات الأمان وسجلات التدقيق. وإذا تبقّى رصيد في المحفظة، ينتظر الحذف حتى تُسوّي الإدارة هذا الرصيد معك.
         </p>
       </Section>
 
