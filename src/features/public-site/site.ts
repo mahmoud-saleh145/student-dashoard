@@ -43,7 +43,7 @@ export function displayPhone(international: string): string {
 }
 
 /** "Last updated" date shown on every page. Change it when the text changes. */
-export const LAST_UPDATED = { en: '29 September 2026', ar: '٢٩ سبتمبر ٢٠٢٦' } as const;
+export const LAST_UPDATED = { en: '11 November 2026', ar: '١١ نوفمبر ٢٠٢٦' } as const;
 
 export const PAGES = [
   { href: '/privacy', en: 'Privacy Policy', ar: 'سياسة الخصوصية' },

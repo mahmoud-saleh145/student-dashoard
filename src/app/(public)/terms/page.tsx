@@ -10,7 +10,9 @@ export const metadata: Metadata = { title: 'Terms & Conditions' };
 /*
  * Describes the rules the platform actually enforces (device binding, access
  * codes, wallet scope, content protection). If a rule changes in the backend,
- * change it here too.
+ * change it here too. The mobile apps are consumption-only (owner decision,
+ * 2026-11-10): codes, wallet and library purchases exist on the student
+ * website only, and these pages must never describe them as in-app features.
  */
 
 export default async function TermsPage({
@@ -48,6 +50,10 @@ function English() {
           prepared by instructors and published by the platform administration. What is offered
           can change over time.
         </p>
+        <p>
+          The mobile app is for using the content on your account: it shows no prices, sells
+          nothing and does not accept access codes, recharge cards or wallet payments.
+        </p>
       </Section>
 
       <Section title="3. Your account">
@@ -65,13 +71,17 @@ function English() {
       <Section title="4. Access to courses and materials">
         <ul>
           <li>
-            Depending on the course, access is granted for free, by redeeming an access code, or
-            by administration approval. Access may be limited to a period set for the course.
+            Depending on the course, access is granted for free, by administration approval, or
+            through your account on the Student Center website. Access may be limited to a period
+            set for the course. Access granted anywhere appears in the app on the same account.
           </li>
-          <li>An access code or recharge card can be redeemed once and cannot be reused.</li>
           <li>
-            Wallet credit can only be spent on Library materials inside the app. Course access is
-            never paid from the wallet.
+            Access codes and recharge cards are redeemed on the website only, once each; they
+            cannot be reused.
+          </li>
+          <li>
+            Wallet credit exists on the website and can only be spent there, on Library materials.
+            Course access is never paid from the wallet.
           </li>
           <li>
             The administration may revoke access that was obtained through misuse, fraud or a
@@ -162,6 +172,10 @@ function Arabic() {
           ومواد المكتبة والإشعارات والدعم. يُعدّ المحاضرون الكورسات والمواد وتنشرها إدارة المنصة،
           وقد يتغيّر المحتوى المتاح مع الوقت.
         </p>
+        <p>
+          تطبيق الموبايل مخصص لاستخدام المحتوى المتاح على حسابك: لا يعرض أسعارًا ولا يبيع شيئًا، ولا
+          يقبل أكواد الوصول أو كروت الشحن أو الدفع من المحفظة.
+        </p>
       </Section>
 
       <Section title="٣. حسابك">
@@ -179,11 +193,11 @@ function Arabic() {
       <Section title="٤. الوصول إلى الكورسات والمواد">
         <ul>
           <li>
-            حسب الكورس، يُمنح الوصول مجانًا أو باستخدام كود وصول أو بموافقة الإدارة، وقد يكون الوصول
-            لمدة محددة للكورس.
+            حسب الكورس، يُمنح الوصول مجانًا أو بموافقة الإدارة أو من خلال حسابك على موقع Student
+            Center، وقد يكون الوصول لمدة محددة للكورس. أي وصول يُمنح يظهر في التطبيق على الحساب نفسه.
           </li>
-          <li>كود الوصول أو كارت الشحن يُستخدم مرة واحدة فقط ولا يمكن إعادة استخدامه.</li>
-          <li>رصيد المحفظة يُستخدم فقط لمواد المكتبة داخل التطبيق، ولا يُخصم منه أبدًا للاشتراك في الكورسات.</li>
+          <li>أكواد الوصول وكروت الشحن تُستخدم على الموقع فقط، مرة واحدة لكل منها، ولا يمكن إعادة استخدامها.</li>
+          <li>رصيد المحفظة موجود على الموقع ويُستخدم هناك فقط لمواد المكتبة، ولا يُخصم منه أبدًا للاشتراك في الكورسات.</li>
           <li>يحق للإدارة إلغاء أي وصول تم الحصول عليه بإساءة استخدام أو احتيال أو مخالفة لهذه الشروط.</li>
         </ul>
       </Section>

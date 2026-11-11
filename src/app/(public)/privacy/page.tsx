@@ -47,9 +47,17 @@ function English() {
           lessons, open lesson attachments and library materials, receive notifications and
           contact support.
         </p>
+        <p>
+          The mobile app is for using the content on your account. It shows no prices, sells
+          nothing, and does not accept access codes, recharge cards or wallet payments. Course and
+          material access is granted by the platform administration or through your account on the
+          Student Center website, and the app simply shows what your account can open. Section 3
+          explains the records those website activities create, because they belong to the same
+          account.
+        </p>
       </Section>
 
-      <Section title="2. Information you give us">
+      <Section title="2. Information you give us in the app">
         <p>When you create an account we ask for:</p>
         <ul>
           <li>your full name;</li>
@@ -68,25 +76,25 @@ function English() {
             a profile photo, which you pick yourself from your photo library (the app does not
             use the camera);
           </li>
-          <li>
-            the messages you write to support inside the app, including account-deletion
-            requests;
-          </li>
-          <li>access codes and recharge-card codes you type in to unlock content or add credit.</li>
+          <li>the messages you write to support inside the app.</li>
         </ul>
         <p>We do not ask students for an email address.</p>
       </Section>
 
-      <Section title="3. Information created while you use the app">
+      <Section title="3. Information created while you use the service">
         <ul>
           <li>
-            <strong>Learning activity:</strong> the courses and course parts you join and how
-            (free, access code, or administration approval); lessons you watch, your playback
-            position, time watched and completion; library materials you unlock.
+            <strong>Learning activity (app):</strong> the courses and course parts on your account
+            and how access was granted (free, by the administration, or through the website); the
+            lessons you watch, your playback position, time watched and completion; the library
+            materials you open.
           </li>
           <li>
-            <strong>Wallet and purchase records:</strong> codes and cards you redeem, your wallet
-            credit balance and every credit or debit on it, and library purchases.
+            <strong>Records from the Student Center website:</strong> if you use the website to
+            redeem an access code or recharge card, hold wallet credit or obtain library materials,
+            we keep the code or card used, your wallet balance and every credit or debit on it, and
+            those library records. The app never creates these records — it only shows the courses
+            and materials that result from them.
           </li>
           <li>
             <strong>Notifications:</strong> the in-app notifications sent to you, whether you have
@@ -143,7 +151,7 @@ function English() {
           <li>to create and secure your account and keep you signed in;</li>
           <li>to decide which courses, lessons and materials you can open, and to show your progress;</li>
           <li>to protect content: device binding, watermarking and detecting screen capture;</li>
-          <li>to keep wallet and purchase records accurate;</li>
+          <li>to keep the records of website wallet activity, redeemed codes and library materials accurate;</li>
           <li>to send you notifications about your courses and announcements;</li>
           <li>to answer your support requests;</li>
           <li>to prevent fraud, account sharing and abuse, and to investigate security problems;</li>
@@ -189,18 +197,31 @@ function English() {
           We keep your information while your account exists. Expired sign-in sessions are
           deleted about 30 days after they expire.
         </p>
-        <p>When your account is deleted:</p>
+        <p>
+          When you ask to delete your account, you are signed out on every device and video access
+          is revoked straight away. The deletion is carried out 30 days later; until then you can
+          cancel it by signing in and choosing “Cancel deletion”. When it is carried out:
+        </p>
         <ul>
-          <li>the account is disabled and can no longer sign in;</li>
-          <li>you are signed out on every device and any video access is revoked;</li>
-          <li>your phone number is released so it can be used to register again.</li>
+          <li>
+            your name, phone number, email (if any), profile photo and gender are erased, the
+            password can no longer be used, and the phone number is released so it can be used to
+            register again;
+          </li>
+          <li>
+            device names, models and identifiers, IP addresses and user agents are removed, and push
+            tokens, notifications, notification preferences and device-change requests are deleted;
+          </li>
+          <li>
+            the subjects and text you wrote in support tickets are removed (the tickets themselves
+            stay for our records).
+          </li>
         </ul>
         <p>
-          We keep the records the platform needs for financial, security and audit purposes —
-          enrollments, redeemed codes, wallet transactions, purchases, support conversations and
-          security and audit logs — together with the disabled account record they refer to,
-          which includes your name, phone number, academic details, profile photo, devices and learning progress. These records are not visible in the app
-          and are used only for those purposes.
+          We keep, without your identity, the records the platform needs for financial, security
+          and audit purposes: enrollments and learning records, academic details, redeemed codes,
+          wallet transactions, library records, and security and audit logs. If wallet credit is left on the
+          account, the deletion waits until the administration has settled it with you.
         </p>
       </Section>
 
@@ -209,7 +230,8 @@ function English() {
           <li>You can update your profile, language and profile photo in the app.</li>
           <li>You can turn notifications off in the app or in your device settings.</li>
           <li>
-            You can ask to delete your account from inside the app or on the{' '}
+            You can delete your account inside the app (Settings → Delete account, confirmed with
+            your password), or ask us on the{' '}
             <Link href={deletionLink('en')}>account deletion page</Link>.
           </li>
           <li>You can contact us to ask for a copy or correction of your information.</li>
@@ -255,9 +277,15 @@ function Arabic() {
           لطلاب الجامعات يتيح لك متابعة الكورسات ومشاهدة الدروس وفتح مرفقات الدروس ومواد المكتبة
           واستقبال الإشعارات والتواصل مع الدعم.
         </p>
+        <p>
+          التطبيق مخصص لاستخدام المحتوى المتاح على حسابك. لا يعرض أسعارًا ولا يبيع شيئًا، ولا يقبل
+          أكواد الوصول أو كروت الشحن أو الدفع من المحفظة. يُمنح الوصول إلى الكورسات والمواد من خلال
+          إدارة المنصة أو من خلال حسابك على موقع Student Center، ويعرض التطبيق فقط ما يتيحه حسابك.
+          يوضح القسم ٣ السجلات التي تنشأ عن هذه العمليات على الموقع، لأنها تخص الحساب نفسه.
+        </p>
       </Section>
 
-      <Section title="٢. المعلومات التي تقدمها لنا">
+      <Section title="٢. المعلومات التي تقدمها لنا داخل التطبيق">
         <p>عند إنشاء الحساب نطلب:</p>
         <ul>
           <li>اسمك الكامل؛</li>
@@ -270,22 +298,23 @@ function Arabic() {
         <p>ويمكنك اختياريًا أن تقدم:</p>
         <ul>
           <li>صورة شخصية تختارها بنفسك من مكتبة الصور (التطبيق لا يستخدم الكاميرا)؛</li>
-          <li>الرسائل التي تكتبها للدعم داخل التطبيق، بما فيها طلبات حذف الحساب؛</li>
-          <li>أكواد الوصول وأكواد كروت الشحن التي تُدخلها لفتح المحتوى أو إضافة رصيد.</li>
+          <li>الرسائل التي تكتبها للدعم داخل التطبيق.</li>
         </ul>
         <p>لا نطلب من الطلاب بريدًا إلكترونيًا.</p>
       </Section>
 
-      <Section title="٣. معلومات تنشأ أثناء استخدامك للتطبيق">
+      <Section title="٣. معلومات تنشأ أثناء استخدامك للخدمة">
         <ul>
           <li>
-            <strong>النشاط التعليمي:</strong> الكورسات وأجزاء الكورسات التي تنضم إليها وطريقة
-            الانضمام (مجاني، كود وصول، أو موافقة الإدارة)؛ الدروس التي تشاهدها وموضع التشغيل ومدة
-            المشاهدة والإكمال؛ مواد المكتبة التي تفتحها.
+            <strong>النشاط التعليمي (التطبيق):</strong> الكورسات وأجزاء الكورسات المتاحة على حسابك
+            وطريقة منح الوصول (مجاني، أو من الإدارة، أو من خلال الموقع)؛ الدروس التي تشاهدها وموضع
+            التشغيل ومدة المشاهدة والإكمال؛ مواد المكتبة التي تفتحها.
           </li>
           <li>
-            <strong>المحفظة وسجلات الشراء:</strong> الأكواد والكروت التي تستخدمها، ورصيد محفظتك وكل
-            عملية إضافة أو خصم عليها، ومشتريات المكتبة.
+            <strong>سجلات من موقع Student Center:</strong> إذا استخدمت الموقع لاستخدام كود وصول أو
+            كارت شحن، أو لديك رصيد محفظة، أو حصلت على مواد من المكتبة، نحتفظ بالكود أو الكارت
+            المستخدم ورصيد محفظتك وكل عملية إضافة أو خصم عليها وسجلات المكتبة. التطبيق لا يُنشئ هذه
+            السجلات أبدًا — بل يعرض فقط الكورسات والمواد الناتجة عنها.
           </li>
           <li>
             <strong>الإشعارات:</strong> الإشعارات المرسلة إليك داخل التطبيق وحالة قراءتها وتفضيلات
@@ -328,7 +357,7 @@ function Arabic() {
           <li>لإنشاء حسابك وتأمينه وإبقائك مسجّل الدخول؛</li>
           <li>لتحديد الكورسات والدروس والمواد المتاحة لك وعرض تقدّمك؛</li>
           <li>لحماية المحتوى: ربط الجهاز والعلامة المائية واكتشاف تسجيل الشاشة؛</li>
-          <li>للحفاظ على دقة سجلات المحفظة والشراء؛</li>
+          <li>للحفاظ على دقة سجلات المحفظة والأكواد المستخدمة ومواد المكتبة على الموقع؛</li>
           <li>لإرسال إشعارات عن كورساتك والإعلانات؛</li>
           <li>للرد على طلبات الدعم؛</li>
           <li>لمنع الاحتيال ومشاركة الحسابات وإساءة الاستخدام والتحقيق في مشكلات الأمان؛</li>
@@ -368,17 +397,24 @@ function Arabic() {
 
       <Section title="٩. مدة الاحتفاظ بالمعلومات">
         <p>نحتفظ بمعلوماتك طالما حسابك موجود. تُحذف جلسات الدخول المنتهية بعد نحو ٣٠ يومًا من انتهائها.</p>
-        <p>عند حذف حسابك:</p>
+        <p>
+          عند طلب حذف حسابك يتم تسجيل خروجك من كل الأجهزة وإلغاء صلاحية تشغيل الفيديو فورًا. ويُنفَّذ
+          الحذف بعد ٣٠ يومًا، ويمكنك إلغاؤه قبل ذلك بتسجيل الدخول واختيار «إلغاء الحذف». وعند التنفيذ:
+        </p>
         <ul>
-          <li>يتم تعطيل الحساب ولا يمكن الدخول به؛</li>
-          <li>يتم تسجيل خروجك من كل الأجهزة وإلغاء أي صلاحية لتشغيل الفيديو؛</li>
-          <li>يتم تحرير رقم هاتفك ليمكن التسجيل به من جديد.</li>
+          <li>
+            يُمسح اسمك ورقم هاتفك وبريدك الإلكتروني (إن وُجد) وصورتك الشخصية والنوع، ولا يمكن استخدام
+            كلمة المرور بعد ذلك، ويُحرَّر رقم هاتفك ليمكن التسجيل به من جديد؛
+          </li>
+          <li>
+            تُحذف أسماء الأجهزة وطرازاتها ومعرّفاتها وعناوين IP ومعرّفات المتصفح/التطبيق، وتُحذف رموز
+            الإشعارات والإشعارات وتفضيلاتها وطلبات تغيير الجهاز؛
+          </li>
+          <li>تُحذف عناوين ونصوص ما كتبته في تذاكر الدعم (وتبقى التذاكر نفسها في سجلاتنا).</li>
         </ul>
         <p>
-          نحتفظ بالسجلات التي تحتاجها المنصة لأغراض مالية وأمنية ورقابية — الاشتراكات والأكواد
-          المستخدمة ومعاملات المحفظة والمشتريات ومحادثات الدعم وسجلات الأمان والتدقيق — مع سجل الحساب
-          المعطّل الذي تشير إليه، والذي يتضمن اسمك ورقم هاتفك وبياناتك الدراسية وصورتك الشخصية وأجهزتك وتقدّمك في الدروس. لا تظهر هذه السجلات في التطبيق ولا
-          تُستخدم إلا لهذه الأغراض.
+          نحتفظ — بدون هويتك — بالسجلات التي تحتاجها المنصة لأغراض مالية وأمنية ورقابية: الاشتراكات
+          وسجلات التعلّم والبيانات الدراسية والأكواد المستخدمة ومعاملات المحفظة وسجلات المكتبة وسجلات الأمان وسجلات التدقيق. وإذا تبقّى رصيد في المحفظة، ينتظر الحذف حتى تُسوّي الإدارة هذا الرصيد معك.
         </p>
       </Section>
 
@@ -387,8 +423,8 @@ function Arabic() {
           <li>يمكنك تعديل ملفك الشخصي واللغة والصورة الشخصية من التطبيق.</li>
           <li>يمكنك إيقاف الإشعارات من التطبيق أو من إعدادات جهازك.</li>
           <li>
-            يمكنك طلب حذف حسابك من داخل التطبيق أو من{' '}
-            <Link href={deletionLink('ar')}>صفحة حذف الحساب</Link>.
+            يمكنك حذف حسابك من داخل التطبيق («الإعدادات» ثم «حذف الحساب» مع تأكيد كلمة المرور)، أو
+            طلب ذلك من <Link href={deletionLink('ar')}>صفحة حذف الحساب</Link>.
           </li>
           <li>يمكنك التواصل معنا لطلب نسخة من معلوماتك أو تصحيحها.</li>
         </ul>

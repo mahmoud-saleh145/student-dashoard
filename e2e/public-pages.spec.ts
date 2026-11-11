@@ -70,3 +70,65 @@ test.describe('public pages', () => {
     await expect(page).toHaveURL(/\/login\?next=%2Fstudents/);
   });
 });
+
+/**
+ * The mobile apps are consumption-only (owner decision, 2026-11-10): no prices,
+ * no purchases, no codes, no wallet payments. These pages are what App Review
+ * reads next to the app, so none of them may describe a code, card or payment
+ * as something done in the app — while still disclosing the website records.
+ */
+test.describe('public pages match the consumption-only mobile app', () => {
+  const IN_APP_SALES = [
+    /codes you type in/i,
+    /inside the app\.? Course access/i,
+    /Code not working/i,
+    /spent on Library materials inside the app/i,
+    /كروت الشحن التي تُدخلها/,
+    /الكود لا يعمل/,
+    /لمواد المكتبة داخل التطبيق/,
+  ];
+
+  for (const path of ['/privacy', '/terms', '/account-deletion', '/contact']) {
+    for (const lang of ['en', 'ar'] as const) {
+      test(`${path} (${lang}) never presents codes, cards or wallet as app features`, async ({ page }) => {
+        await page.goto(lang === 'ar' ? `${path}?lang=ar` : path);
+        const text = await page.locator('main').innerText();
+        for (const pattern of IN_APP_SALES) expect(text).not.toMatch(pattern);
+      });
+    }
+  }
+
+  test('the privacy policy says what the app does not do, and still discloses website records', async ({ page }) => {
+    await page.goto('/privacy');
+    const text = await page.locator('main').innerText();
+    expect(text).toMatch(/does not accept access codes, recharge cards or wallet payments/);
+    expect(text).toMatch(/Records from the Student Center website/);
+    expect(text).toMatch(/The app never creates these records/);
+    await page.goto('/privacy?lang=ar');
+    const ar = await page.locator('main').innerText();
+    expect(ar).toMatch(/لا يقبل\s+أكواد الوصول أو كروت الشحن أو الدفع من المحفظة/);
+    expect(ar).toMatch(/سجلات من موقع Student Center/);
+  });
+
+  test('deletion is described as the app does it: password, 30 days, cancel by signing in', async ({ page }) => {
+    for (const path of ['/account-deletion', '/privacy']) {
+      await page.goto(path);
+      const text = await page.locator('main').innerText();
+      expect(text).toMatch(/30 days/);
+      expect(text).toMatch(/Cancel deletion/);
+      expect(text).not.toMatch(/as a support ticket/);
+    }
+  });
+
+  test('the support page covers access, devices, playback and deletion, in both languages', async ({ page }) => {
+    await page.goto('/contact');
+    for (const name of ['Getting into your account', 'Devices and approval', 'Playback problems', 'Account deletion and privacy']) {
+      await expect(page.getByRole('heading', { name })).toBeVisible();
+    }
+    await expect(page.locator('a[href^="mailto:"]').first()).toBeVisible();
+    await page.goto('/contact?lang=ar');
+    for (const name of ['الدخول إلى حسابك', 'الأجهزة وموافقة الإدارة', 'مشاكل التشغيل', 'حذف الحساب والخصوصية']) {
+      await expect(page.getByRole('heading', { name })).toBeVisible();
+    }
+  });
+});
