@@ -3,6 +3,16 @@ import { expect, test } from '@playwright/test';
 import {
   EMPTY_AUDIENCE,
   IDLE_LADDER,
+  addYearGroup,
+  audienceServerGroupErrors,
+  departmentsForRung,
+  discardsSelection,
+  perYearRungs,
+  removeYearGroup,
+  selectYearMode,
+  setYearDepartments,
+  toggleYearDepartment,
+  type DepartmentLadders,
   audienceDiff,
   audienceFromMaterial,
   audiencePayload,
@@ -63,22 +73,44 @@ const DEPARTMENTS = [
   { id: 'cce', studyType: 'PROGRAMS' as const },
 ];
 
+/** Departments chosen per year: First year -> Preparatory + Civil. */
 const FULL: AudienceDraft = {
   universityId: 'uni',
   facultyId: 'fac',
   departmentScope: 'DEPARTMENTS',
   departmentIds: ['prep', 'civil'],
   academicYearIds: ['y1'],
+  yearMode: 'SELECTED_YEARS',
+  yearDepartments: { y1: ['prep', 'civil'] },
+};
+
+/** Whole college, filed under First year: the shape the single ladder governs. */
+const FAC_YEARS: AudienceDraft = {
+  ...FULL,
+  departmentScope: 'FACULTY',
+  departmentIds: [],
+  yearMode: 'ALL_YEARS',
+  yearDepartments: {},
+};
+
+/** Selected departments, all years: one department list, no years. */
+const DEPTS_ALL: AudienceDraft = {
+  ...FULL,
+  yearMode: 'ALL_YEARS',
+  academicYearIds: [],
+  yearDepartments: {},
 };
 
 /** Every audience key a request body carries, in both year spellings. */
 const AUDIENCE_KEYS = [
   'academicYearId',
   'academicYearIds',
+  'audienceMappings',
   'departmentIds',
   'departmentScope',
   'facultyId',
   'universityId',
+  'yearScope',
 ];
 
 const CTX = {
@@ -96,6 +128,8 @@ test.describe('dependent-field resets', () => {
       departmentScope: 'DEPARTMENTS',
       departmentIds: [],
       academicYearIds: [],
+      yearMode: 'ALL_YEARS',
+      yearDepartments: {},
     });
   });
 
@@ -109,6 +143,8 @@ test.describe('dependent-field resets', () => {
       facultyId: 'fac2',
       departmentIds: [],
       academicYearIds: [],
+      yearMode: 'ALL_YEARS',
+      yearDepartments: {},
     });
   });
 
@@ -188,36 +224,50 @@ test.describe('year/level ladder', () => {
   });
 
   test('a rung outside the audience ladder is refused, not kept', () => {
-    const { errors } = checkAudience({ ...FULL, academicYearIds: ['l0'] }, CTX);
+    const { errors } = checkAudience({ ...FAC_YEARS, academicYearIds: ['l0'] }, CTX);
     expect(errors.academicYearIds).toMatch(/not part of the ladder/);
   });
 
   test('every ticked rung must be on the ladder, and the count is named', () => {
-    const one = checkAudience({ ...FULL, academicYearIds: ['y1', 'l0'] }, CTX).errors;
+    const one = checkAudience({ ...FAC_YEARS, academicYearIds: ['y1', 'l0'] }, CTX).errors;
     expect(one.academicYearIds).toMatch(/^One selected year is not part/);
-    const two = checkAudience({ ...FULL, academicYearIds: ['y1', 'l0', 'l1'] }, CTX).errors;
+    const two = checkAudience({ ...FAC_YEARS, academicYearIds: ['y1', 'l0', 'l1'] }, CTX).errors;
     expect(two.academicYearIds).toMatch(/^2 selected years are not part/);
-    expect(checkAudience({ ...FULL, academicYearIds: ['y1', 'y2'] }, CTX).errors).toEqual({});
+    expect(checkAudience({ ...FAC_YEARS, academicYearIds: ['y1', 'y2'] }, CTX).errors).toEqual({});
   });
 
   test('no year/level is always fine — it is a filter, not eligibility', () => {
-    const { errors, pending } = checkAudience({ ...FULL, academicYearIds: [] }, CTX);
-    expect(errors).toEqual({});
-    expect(pending).toBe(false);
+    for (const draft of [{ ...FAC_YEARS, academicYearIds: [] }, DEPTS_ALL]) {
+      const { errors, pending } = checkAudience(draft, CTX);
+      expect(errors).toEqual({});
+      expect(pending).toBe(false);
+    }
   });
 
   test('a year/level waits for its ladder to load', () => {
-    const { pending } = checkAudience(FULL, {
+    const { pending } = checkAudience(FAC_YEARS, {
       ...CTX,
       ladder: { ...IDLE_LADDER, status: 'loading' },
     });
     expect(pending).toBe(true);
   });
 
-  test('departments with no shared ladder cannot carry a year/level', () => {
-    const ladder: LadderState = { status: 'ready', ...intersectLadders([YEARS, LEVELS]) };
-    const { errors } = checkAudience(FULL, { ...CTX, ladder });
-    expect(errors.academicYearIds).toMatch(/do not share one ladder/);
+  test('departments on different ladders each carry their own year, never a shared one', () => {
+    // Replaces "no shared ladder, no year": per-year groups check each year
+    // against the ladder of the departments listed under it.
+    const ladders = {
+      status: 'ready' as const,
+      byDepartment: { prep: YEARS, civil: LEVELS },
+    };
+    const ctx = { ...CTX, departmentLadders: ladders };
+    const ok = {
+      ...FULL,
+      academicYearIds: ['y1', 'l0'],
+      yearDepartments: { y1: ['prep'], l0: ['civil'] },
+    };
+    expect(checkAudience(ok, ctx).groupErrors).toEqual({});
+    const shared = { ...FULL, yearDepartments: { y1: ['prep', 'civil'] } };
+    expect(checkAudience(shared, ctx).groupErrors.y1).toMatch(/cannot be filed under/);
   });
 });
 
@@ -229,13 +279,19 @@ test.describe('FACULTY and DEPARTMENTS scopes', () => {
   });
 
   test('DEPARTMENTS needs at least one department', () => {
-    const { errors } = checkAudience({ ...FULL, departmentIds: [], academicYearIds: [] }, CTX);
+    const { errors } = checkAudience({ ...DEPTS_ALL, departmentIds: [] }, CTX);
     expect(errors.departmentIds).toMatch(/at least one/);
   });
 
   test('a department the college no longer offers is flagged, never silently kept', () => {
-    const { errors } = checkAudience({ ...FULL, departmentIds: ['prep', 'gone'] }, CTX);
+    const { errors } = checkAudience({ ...DEPTS_ALL, departmentIds: ['prep', 'gone'] }, CTX);
     expect(errors.departmentIds).toMatch(/no longer offered/);
+    // The same, per year: flagged beside the year it is ticked under.
+    const perYearGone = checkAudience(
+      { ...FULL, yearDepartments: { y1: ['prep', 'gone'] } },
+      { ...CTX, departmentLadders: { status: 'ready', byDepartment: { prep: YEARS, civil: YEARS } } },
+    );
+    expect(perYearGone.groupErrors.y1).toMatch(/no longer offered/);
   });
 
   test('an inactive university or college is flagged', () => {
@@ -269,7 +325,14 @@ test.describe('atomic payloads — the contract', () => {
   });
 
   test('several years go as the de-duplicated list, the first one as the legacy id', () => {
-    const payload = audiencePayload({ ...FULL, academicYearIds: ['y2', 'y1', 'y2'] });
+    const payload = audiencePayload({
+      ...FULL,
+      departmentScope: 'FACULTY',
+      departmentIds: [],
+      yearMode: 'ALL_YEARS',
+      yearDepartments: {},
+      academicYearIds: ['y2', 'y1', 'y2'],
+    });
     expect(payload.academicYearIds).toEqual(['y2', 'y1']);
     expect(payload.academicYearId).toBe('y2');
   });
@@ -291,6 +354,8 @@ test.describe('atomic payloads — the contract', () => {
       departmentIds: ['prep', 'civil'],
       academicYearId: 'y1',
       academicYearIds: ['y1'],
+      yearScope: 'SELECTED_YEARS',
+      audienceMappings: [{ academicYearId: 'y1', departmentIds: ['prep', 'civil'] }],
     });
   });
 
@@ -382,8 +447,10 @@ test.describe('atomic payloads — the contract', () => {
   });
 
   test('sameAudience ignores department and year order, not membership', () => {
-    expect(sameAudience(FULL, { ...FULL, departmentIds: ['civil', 'prep'] })).toBe(true);
-    expect(sameAudience(FULL, { ...FULL, departmentIds: ['prep'] })).toBe(false);
+    expect(sameAudience(FULL, { ...FULL, yearDepartments: { y1: ['civil', 'prep'] } })).toBe(true);
+    expect(sameAudience(FULL, { ...FULL, yearDepartments: { y1: ['prep'] } })).toBe(false);
+    expect(sameAudience(DEPTS_ALL, { ...DEPTS_ALL, departmentIds: ['civil', 'prep'] })).toBe(true);
+    expect(sameAudience(DEPTS_ALL, { ...DEPTS_ALL, departmentIds: ['prep'] })).toBe(false);
     const years = { ...FULL, academicYearIds: ['y1', 'y2'] };
     expect(sameAudience(years, { ...years, academicYearIds: ['y2', 'y1'] })).toBe(true);
     expect(sameAudience(years, FULL)).toBe(false);
@@ -401,7 +468,50 @@ test.describe('loading an existing audience', () => {
         academicYearId: 'y1',
         academicYearIds: ['y1', 'y2'],
       }),
-    ).toEqual({ ...FULL, departmentIds: ['prep'], academicYearIds: ['y1', 'y2'] });
+    ).toEqual({
+      ...FULL,
+      departmentIds: ['prep'],
+      academicYearIds: ['y1', 'y2'],
+      // A backend that predates per-year departments filed the same
+      // departments under every year: that is what it is read as.
+      yearDepartments: { y1: ['prep'], y2: ['prep'] },
+    });
+  });
+
+  test('a material with departments per year loads each year with its own departments', () => {
+    expect(
+      audienceFromMaterial({
+        universityId: 'uni',
+        facultyId: 'fac',
+        departmentScope: 'DEPARTMENTS',
+        departmentIds: ['prep', 'civil'],
+        academicYearId: 'y1',
+        academicYearIds: ['y1', 'y2'],
+        audienceMappings: [
+          { academicYearId: 'y1', departmentIds: ['prep'] },
+          { academicYearId: 'y2', departmentIds: ['civil'] },
+        ],
+      }),
+    ).toEqual({
+      ...FULL,
+      departmentIds: ['prep', 'civil'],
+      academicYearIds: ['y1', 'y2'],
+      yearDepartments: { y1: ['prep'], y2: ['civil'] },
+    });
+  });
+
+  test('a DEPARTMENTS material with no years loads as "all years", one department list', () => {
+    expect(
+      audienceFromMaterial({
+        universityId: 'uni',
+        facultyId: 'fac',
+        departmentScope: 'DEPARTMENTS',
+        departmentIds: ['prep'],
+        academicYearId: null,
+        academicYearIds: [],
+        audienceMappings: [],
+      }),
+    ).toMatchObject({ yearMode: 'ALL_YEARS', departmentIds: ['prep'], academicYearIds: [], yearDepartments: {} });
   });
 
   test('a backend that predates the list is read through its single rung', () => {
@@ -474,7 +584,7 @@ test.describe('confirmation and errors', () => {
     expect(summary.yearLevel).toBe('Preparatory year, First year (Year)');
 
     const draft = summarizeDraft(
-      { ...FULL, academicYearIds: ['y2', 'y1'] },
+      { ...FAC_YEARS, academicYearIds: ['y2', 'y1'] },
       {
         universities: [{ id: 'uni', name: 'Mansoura University' }],
         faculties: [{ id: 'fac', name: 'Engineering (General)' }],
@@ -530,5 +640,263 @@ test.describe('packages — one material, its own parts', () => {
     expect(packagePartIdsForUpdate(['p1'], ['p1'], PARTS)).toBeUndefined();
     expect(packagePartIdsForUpdate(['p1'], ['p1', 'p2'], PARTS)).toEqual(['p1', 'p2']);
     expect(packagePartIdsForUpdate(['p1'], ['p1', 'foreign'], PARTS)).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Departments per year/level
+// ---------------------------------------------------------------------------
+
+/**
+ * Programs college: MTE and Electrical on the LEVEL ladder (000/200),
+ * Aerospace on its own ladder (only Level 400), Foundation on General's YEAR
+ * ladder.
+ */
+const L000 = year('l000', 0, 'LEVEL');
+const L200 = year('l200', 2, 'LEVEL');
+const L400 = year('l400', 4, 'LEVEL');
+const PROGRAMS_DEPTS = [
+  { id: 'mte', name: 'MTE', studyType: 'PROGRAMS' as const },
+  { id: 'elec', name: 'Electrical', studyType: 'PROGRAMS' as const },
+  { id: 'aer', name: 'Aerospace', studyType: 'PROGRAMS' as const },
+  { id: 'found', name: 'Foundation', studyType: 'GENERAL' as const },
+];
+const LADDERS: DepartmentLadders = {
+  status: 'ready',
+  byDepartment: { mte: [L000, L200], elec: [L000, L200], aer: [L400], found: YEARS },
+};
+const PER_YEAR_CTX = { ...CTX, departments: PROGRAMS_DEPTS, departmentLadders: LADDERS };
+
+const perYear = (groups: Record<string, string[]>): AudienceDraft => ({
+  universityId: 'uni',
+  facultyId: 'fac',
+  departmentScope: 'DEPARTMENTS',
+  yearMode: 'SELECTED_YEARS',
+  academicYearIds: Object.keys(groups),
+  yearDepartments: groups,
+  departmentIds: [...new Set(Object.values(groups).flat())],
+});
+
+test.describe('departments per year/level — transitions', () => {
+  test('each year keeps its own departments: a change in Level 000 never touches Level 200', () => {
+    let draft = selectYearMode({ ...perYear({}), yearMode: 'ALL_YEARS' }, 'SELECTED_YEARS');
+    draft = addYearGroup(draft, 'l000');
+    draft = toggleYearDepartment(draft, 'l000', 'mte', true);
+    draft = addYearGroup(draft, 'l200');
+    draft = setYearDepartments(draft, 'l200', ['elec', 'mte']);
+    expect(draft.yearDepartments).toEqual({ l000: ['mte'], l200: ['elec', 'mte'] });
+
+    const edited = toggleYearDepartment(draft, 'l000', 'elec', true);
+    expect(edited.yearDepartments.l000).toEqual(['mte', 'elec']);
+    expect(edited.yearDepartments.l200).toEqual(['elec', 'mte']);
+    expect([...edited.departmentIds].sort()).toEqual(['elec', 'mte']);
+
+    const untick = toggleYearDepartment(edited, 'l200', 'mte', false);
+    expect(untick.yearDepartments.l000).toEqual(['mte', 'elec']);
+    expect(untick.yearDepartments.l200).toEqual(['elec']);
+  });
+
+  test('removing a year removes only that year and its departments', () => {
+    const removed = removeYearGroup(perYear({ l000: ['mte'], l200: ['elec'] }), 'l200');
+    expect(removed.academicYearIds).toEqual(['l000']);
+    expect(removed.yearDepartments).toEqual({ l000: ['mte'] });
+    expect(removed.departmentIds).toEqual(['mte']);
+  });
+
+  test('adding a year twice changes nothing; a new year starts with no department', () => {
+    const draft = perYear({ l000: ['mte'] });
+    expect(addYearGroup(draft, 'l000')).toBe(draft);
+    expect(addYearGroup(draft, 'l200').yearDepartments.l200).toEqual([]);
+  });
+
+  test('back to all years keeps every department (the union) and drops the years', () => {
+    const all = selectYearMode(perYear({ l000: ['mte'], l200: ['elec'] }), 'ALL_YEARS');
+    expect(all).toMatchObject({ yearMode: 'ALL_YEARS', academicYearIds: [], yearDepartments: {} });
+    expect(all.departmentIds).toEqual(['mte', 'elec']);
+  });
+
+  test('whole college -> selected departments keeps the years as empty groups, and back', () => {
+    const faculty: AudienceDraft = {
+      ...EMPTY_AUDIENCE,
+      universityId: 'uni',
+      facultyId: 'fac',
+      academicYearIds: ['l000'],
+    };
+    expect(selectScope(faculty, 'DEPARTMENTS')).toMatchObject({
+      yearMode: 'SELECTED_YEARS',
+      academicYearIds: ['l000'],
+      yearDepartments: { l000: [] },
+    });
+    expect(selectScope(perYear({ l000: ['mte'] }), 'FACULTY')).toMatchObject({
+      academicYearIds: ['l000'],
+      departmentIds: [],
+      yearMode: 'ALL_YEARS',
+    });
+  });
+
+  test('a change that would throw a choice away is recognised, so the editor can ask first', () => {
+    const draft = perYear({ l000: ['mte'], l200: ['elec'] });
+    expect(discardsSelection(draft, selectFaculty(draft, 'other'))).toBe(true);
+    expect(discardsSelection(draft, selectYearMode(draft, 'ALL_YEARS'))).toBe(true);
+    expect(discardsSelection(draft, selectScope(draft, 'FACULTY'))).toBe(true);
+    expect(discardsSelection(draft, toggleYearDepartment(draft, 'l000', 'elec', true))).toBe(false);
+    const empty = { ...EMPTY_AUDIENCE, universityId: 'uni' };
+    expect(discardsSelection(empty, selectUniversity(empty, 'other'))).toBe(false);
+  });
+});
+
+test.describe('departments per year/level — what is offered', () => {
+  test('the years offered are every rung on some department’s ladder, in ladder order', () => {
+    expect(perYearRungs(PROGRAMS_DEPTS, LADDERS, null).map((r) => r.id)).toEqual([
+      'l000',
+      'y1',
+      'l200',
+      'y2',
+      'l400',
+    ]);
+    // Once Programs is ticked, General's rungs are no longer offered.
+    expect(perYearRungs(PROGRAMS_DEPTS, LADDERS, 'PROGRAMS').map((r) => r.id)).toEqual([
+      'l000',
+      'l200',
+      'l400',
+    ]);
+  });
+
+  test('a department is offered under a year only when that year is on its own ladder', () => {
+    expect(departmentsForRung(PROGRAMS_DEPTS, LADDERS, 'l000').map((d) => d.id)).toEqual(['mte', 'elec']);
+    expect(departmentsForRung(PROGRAMS_DEPTS, LADDERS, 'l400').map((d) => d.id)).toEqual(['aer']);
+  });
+});
+
+test.describe('departments per year/level — validation', () => {
+  test('a valid per-year audience passes', () => {
+    const check = checkAudience(perYear({ l000: ['mte'], l200: ['elec'] }), PER_YEAR_CTX);
+    expect(check).toEqual({ errors: {}, groupErrors: {}, pending: false });
+  });
+
+  test('a year with no department is flagged beside that year, never read as "everyone"', () => {
+    const check = checkAudience(perYear({ l000: ['mte'], l200: [] }), PER_YEAR_CTX);
+    expect(Object.keys(check.groupErrors)).toEqual(['l200']);
+    expect(check.groupErrors.l200).toContain('Choose at least one department');
+    expect(check.errors.yearDepartments).toBeTruthy();
+  });
+
+  test('per-year with no year at all is refused: add one, or choose all years', () => {
+    expect(checkAudience(perYear({}), PER_YEAR_CTX).errors.academicYearIds).toContain(
+      'or choose All years',
+    );
+  });
+
+  test('a department ticked under a year that is not on its ladder is named', () => {
+    const check = checkAudience(perYear({ l400: ['aer', 'mte'] }), PER_YEAR_CTX);
+    expect(check.groupErrors.l400).toContain('MTE cannot be filed under');
+  });
+
+  test('General and Programs split across two years are refused for the material', () => {
+    const check = checkAudience(perYear({ l000: ['mte'], y1: ['found'] }), PER_YEAR_CTX);
+    expect(check.errors.departmentIds).toContain('cannot be combined');
+  });
+
+  test('while the ladders load, nothing is refused but nothing is ready', () => {
+    const check = checkAudience(perYear({ l000: ['mte'] }), {
+      ...PER_YEAR_CTX,
+      departmentLadders: { status: 'loading', byDepartment: {} },
+    });
+    expect(check).toMatchObject({ pending: true, groupErrors: {} });
+  });
+});
+
+test.describe('departments per year/level — the request body', () => {
+  test('each year goes with its own departments; the union and the years beside them', () => {
+    const payload = audiencePayload(perYear({ l000: ['mte', 'mte'], l200: ['elec', 'aer'] }));
+    expect(payload).toMatchObject({
+      departmentScope: 'DEPARTMENTS',
+      yearScope: 'SELECTED_YEARS',
+      academicYearIds: ['l000', 'l200'],
+      academicYearId: 'l000',
+      departmentIds: ['mte', 'elec', 'aer'],
+      audienceMappings: [
+        { academicYearId: 'l000', departmentIds: ['mte'] },
+        { academicYearId: 'l200', departmentIds: ['elec', 'aer'] },
+      ],
+    });
+  });
+
+  test('all years says so explicitly and carries no year, whatever is left in the draft', () => {
+    const payload = audiencePayload({
+      ...perYear({}),
+      yearMode: 'ALL_YEARS',
+      departmentIds: ['mte'],
+      academicYearIds: ['l000'],
+    });
+    expect(payload).toMatchObject({
+      yearScope: 'ALL_YEARS',
+      academicYearIds: [],
+      academicYearId: null,
+      audienceMappings: [],
+      departmentIds: ['mte'],
+    });
+  });
+
+  test('whole college keeps its year list and sends no per-year departments', () => {
+    const payload = audiencePayload({
+      ...EMPTY_AUDIENCE,
+      universityId: 'u',
+      facultyId: 'f',
+      academicYearIds: ['y1'],
+    });
+    expect(payload).toMatchObject({
+      yearScope: 'SELECTED_YEARS',
+      academicYearIds: ['y1'],
+      audienceMappings: [],
+      departmentIds: [],
+    });
+  });
+
+  test('moving a department from one year to another is an audience change; reordering is not', () => {
+    const a = perYear({ l000: ['mte'], l200: ['elec'] });
+    expect(sameAudience(a, perYear({ l200: ['elec'], l000: ['mte'] }))).toBe(true);
+    expect(sameAudience(a, perYear({ l000: ['elec'], l200: ['mte'] }))).toBe(false);
+    const { audienceChanged, body } = updateMaterialBody(
+      { title: 'T', titleAr: '', description: '', subjectId: '' },
+      toggleYearDepartment(a, 'l000', 'elec', true),
+      a,
+    );
+    expect(audienceChanged).toBe(true);
+    expect(body.audienceMappings).toEqual([
+      { academicYearId: 'l000', departmentIds: ['mte', 'elec'] },
+      { academicYearId: 'l200', departmentIds: ['elec'] },
+    ]);
+  });
+
+  test('a refusal of one year group lands beside that year', () => {
+    const sent = audiencePayload(perYear({ l000: ['mte'], l200: ['elec'] }));
+    expect(
+      audienceServerGroupErrors(
+        {
+          'audienceMappings.1.departmentIds': [
+            'one or more departments do not belong to the selected college',
+          ],
+        },
+        sent,
+      ),
+    ).toEqual({ l200: 'One or more departments do not belong to the selected college.' });
+    expect(
+      audienceServerErrors({
+        audienceMappings: ['General and Programs departments cannot be combined'],
+      }).yearDepartments,
+    ).toBe('General and Programs departments cannot be combined.');
+  });
+
+  test('the review lists departments per year, and marks the row when one year changed', () => {
+    const lookup = { departments: PROGRAMS_DEPTS, ladder: IDLE_LADDER, rungs: [L000, L200] };
+    const before = summarizeDraft(perYear({ l000: ['mte'], l200: ['elec'] }), lookup);
+    const after = summarizeDraft(perYear({ l000: ['mte', 'elec'], l200: ['elec'] }), lookup);
+    expect(before.perYear).toEqual(['Level 0: MTE', 'Level 2: Electrical']);
+    const row = audienceDiff(before, after).find((r) => r.label === 'Departments per year / level');
+    expect(row).toMatchObject({
+      changed: true,
+      after: 'Level 0: MTE, Electrical; Level 2: Electrical',
+    });
   });
 });

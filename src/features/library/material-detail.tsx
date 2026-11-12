@@ -150,6 +150,16 @@ function AudienceCard({
               { label: 'Year / level', value: summary.yearLevel },
             ]}
           />
+          {summary.perYear.length > 0 ? (
+            <div data-testid="material-audience-per-year">
+              <p className="text-xs font-medium text-muted">Departments per year / level</p>
+              <ul className="mt-1 space-y-1 text-sm text-foreground">
+                {summary.perYear.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       </CardBody>
     </Card>

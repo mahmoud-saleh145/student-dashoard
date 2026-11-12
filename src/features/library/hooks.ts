@@ -21,10 +21,13 @@ import type {
 } from '@/types/commerce';
 
 import {
+  IDLE_DEPARTMENT_LADDERS,
   IDLE_LADDER,
   intersectLadders,
+  isPerYear,
   ladderScopes,
   type AudienceDraft,
+  type DepartmentLadders,
   type LadderState,
 } from './audience';
 
@@ -127,13 +130,59 @@ export function useAudienceLadder(draft: AudienceDraft): LadderState {
   return { status: 'ready', ...intersectLadders(results.map((result) => result.data ?? [])) };
 }
 
+/**
+ * Every department's own ladder, for choosing departments per year/level.
+ *
+ * One cached `catalog/academic-years?departmentId=` request per department of
+ * the college, keyed exactly as `useAudienceLadder` keys a department, so the
+ * two share a cache. Only fetched while the draft is per-year.
+ */
+export function useDepartmentLadders(departmentIds: string[], enabled: boolean): DepartmentLadders {
+  const ids = enabled ? [...new Set(departmentIds)].sort() : [];
+  const results = useQueries({
+    queries: ids.map((departmentId) => ({
+      queryKey: queryKeys.catalog.academicYears(departmentId),
+      queryFn: () => api.get<AcademicYear[]>('catalog/academic-years', { query: { departmentId } }),
+      staleTime: CATALOG_STALE_TIME,
+    })),
+  });
+
+  if (ids.length === 0) return IDLE_DEPARTMENT_LADDERS;
+  const failed = results.filter((result) => result.isError && !result.data && !result.isFetching);
+  const byDepartment = Object.fromEntries(
+    ids.flatMap((id, index) => {
+      const data = results[index]?.data;
+      return data ? [[id, data]] : [];
+    }),
+  ) as Record<string, AcademicYear[]>;
+  if (failed.length > 0) {
+    return {
+      status: 'error',
+      byDepartment,
+      retry: () => {
+        for (const result of failed) void result.refetch();
+      },
+    };
+  }
+  if (results.some((result) => !result.data)) return { status: 'loading', byDepartment };
+  return { status: 'ready', byDepartment };
+}
+
 /** Everything the audience editor reads, in one place for the form to share. */
 export function useLibraryAudienceData(draft: AudienceDraft) {
   const universities = useUniversities();
   const faculties = useFaculties(draft.universityId || null);
   const departments = useDepartments(draft.facultyId || null);
-  const ladder = useAudienceLadder(draft);
-  return { universities, faculties, departments, ladder };
+  // The single ladder governs only a whole-college material now; departments
+  // are checked year by year against their own ladders.
+  const ladder = useAudienceLadder(
+    draft.departmentScope === 'FACULTY' ? draft : { ...draft, departmentIds: [] },
+  );
+  const departmentLadders = useDepartmentLadders(
+    (departments.data ?? []).map((d) => d.id),
+    isPerYear(draft),
+  );
+  return { universities, faculties, departments, ladder, departmentLadders };
 }
 
 // --- materials -------------------------------------------------------------

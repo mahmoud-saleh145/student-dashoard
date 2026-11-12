@@ -1,10 +1,12 @@
 import type {
   CreateMaterialInput,
   LibraryAudienceInput,
+  LibraryAudienceMapping,
   LibraryDepartmentScope,
   LibraryMaterialAudience,
   LibraryMaterialDetail,
   LibraryPartRow,
+  LibraryYearScope,
   UpdateMaterialInput,
 } from '@/types/commerce';
 import type {
@@ -34,8 +36,16 @@ import type {
  *   - General and Programs departments are never combined; the track is read
  *     from the departments' own `studyType`, never chosen separately;
  *   - the year/level is optional, a browse filter only, and must be a rung of
- *     the ladder that governs the audience — for several departments, a rung
- *     every one of their ladders shares.
+ *     the ladder that governs the audience;
+ *   - a DEPARTMENTS material filed under specific years chooses its
+ *     departments PER YEAR: each year/level is its own group, and a change in
+ *     one group never touches another. There is no single department list
+ *     that silently applies to every selected year. A department is offered
+ *     under a year only when that year is on the department's own ladder.
+ *
+ * The year/level only says where the material appears when browsing. Who may
+ * see it is the college and the departments (all of them, over every year);
+ * a student's own registered year is never part of it.
  */
 
 export type StudyTrack = 'GENERAL' | 'PROGRAMS';
@@ -45,9 +55,26 @@ export interface AudienceDraft {
   universityId: string;
   facultyId: string;
   departmentScope: LibraryDepartmentScope;
+  /**
+   * DEPARTMENTS, all years: the departments ticked. DEPARTMENTS, specific
+   * years: the union of every year's departments, kept in step by the
+   * transitions below. FACULTY: always empty.
+   */
   departmentIds: string[];
-  /** Every year/level ticked; empty means "all years". */
+  /**
+   * FACULTY: every year/level ticked; empty means "all years".
+   * DEPARTMENTS, specific years: the year groups, in the order shown.
+   * DEPARTMENTS, all years: always empty.
+   */
   academicYearIds: string[];
+  /**
+   * DEPARTMENTS only: one department list for every year (ALL_YEARS), or
+   * departments chosen per year/level (SELECTED_YEARS). A FACULTY material's
+   * year scope is read from `academicYearIds`.
+   */
+  yearMode: LibraryYearScope;
+  /** DEPARTMENTS, specific years: each year/level id -> its own departments. */
+  yearDepartments: Record<string, string[]>;
 }
 
 export const EMPTY_AUDIENCE: AudienceDraft = Object.freeze({
@@ -56,7 +83,27 @@ export const EMPTY_AUDIENCE: AudienceDraft = Object.freeze({
   departmentScope: 'FACULTY',
   departmentIds: [],
   academicYearIds: [],
+  yearMode: 'ALL_YEARS',
+  yearDepartments: {},
 }) as AudienceDraft;
+
+/** A fresh empty draft (EMPTY_AUDIENCE is frozen and shared). */
+export function emptyAudience(): AudienceDraft {
+  return { ...EMPTY_AUDIENCE, departmentIds: [], academicYearIds: [], yearDepartments: {} };
+}
+
+/** Is this draft choosing departments per year/level? */
+export function isPerYear(draft: Pick<AudienceDraft, 'departmentScope' | 'yearMode'>): boolean {
+  return draft.departmentScope === 'DEPARTMENTS' && draft.yearMode === 'SELECTED_YEARS';
+}
+
+/** The union of every year group's departments, in group order. */
+function unionOfGroups(
+  academicYearIds: string[],
+  yearDepartments: Record<string, string[]>,
+): string[] {
+  return [...new Set(academicYearIds.flatMap((id) => yearDepartments[id] ?? []))];
+}
 
 /** More rungs than any ladder has; the backend refuses a longer list. */
 export const MAX_ACADEMIC_YEARS = 20;
@@ -82,18 +129,39 @@ export function audienceFromMaterial(
     | 'academicYearIds'
     | 'departmentScope'
     | 'departmentIds'
-  > | null,
+  > &
+    Partial<Pick<LibraryMaterialDetail, 'audienceMappings'>> | null,
 ): AudienceDraft {
-  if (!material) return { ...EMPTY_AUDIENCE, departmentIds: [], academicYearIds: [] };
+  if (!material) return emptyAudience();
   const departmentScope = material.departmentScope ?? 'FACULTY';
-  return {
+  const years = savedAcademicYearIds(material);
+  const departmentIds = [...(material.departmentIds ?? [])];
+  const base = {
     universityId: material.universityId ?? '',
     facultyId: material.facultyId ?? '',
     departmentScope,
-    // A FACULTY material has no links; anything else would be a stored
-    // inconsistency the backend itself refuses to write.
-    departmentIds: departmentScope === 'DEPARTMENTS' ? [...(material.departmentIds ?? [])] : [],
-    academicYearIds: savedAcademicYearIds(material),
+  };
+
+  // A FACULTY material has no department links; anything else would be a
+  // stored inconsistency the backend itself refuses to write.
+  if (departmentScope !== 'DEPARTMENTS') {
+    return { ...base, departmentIds: [], academicYearIds: years, yearMode: 'ALL_YEARS', yearDepartments: {} };
+  }
+  if (years.length === 0) {
+    return { ...base, departmentIds, academicYearIds: [], yearMode: 'ALL_YEARS', yearDepartments: {} };
+  }
+  // Departments per year. A backend that predates the mapping filed the same
+  // departments under every year, which is exactly what it meant.
+  const saved = new Map((material.audienceMappings ?? []).map((m) => [m.academicYearId, m.departmentIds]));
+  const yearDepartments = Object.fromEntries(
+    years.map((id) => [id, [...(material.audienceMappings ? (saved.get(id) ?? []) : departmentIds)]]),
+  );
+  return {
+    ...base,
+    departmentIds: unionOfGroups(years, yearDepartments),
+    academicYearIds: years,
+    yearMode: 'SELECTED_YEARS',
+    yearDepartments,
   };
 }
 
@@ -110,6 +178,8 @@ export function selectUniversity(draft: AudienceDraft, universityId: string): Au
     departmentScope: draft.departmentScope,
     departmentIds: [],
     academicYearIds: [],
+    yearMode: 'ALL_YEARS',
+    yearDepartments: {},
   };
 }
 
@@ -119,20 +189,141 @@ export function selectUniversity(draft: AudienceDraft, universityId: string): Au
  */
 export function selectFaculty(draft: AudienceDraft, facultyId: string): AudienceDraft {
   if (facultyId === draft.facultyId) return draft;
-  return { ...draft, facultyId, departmentIds: [], academicYearIds: [] };
+  return {
+    ...draft,
+    facultyId,
+    departmentIds: [],
+    academicYearIds: [],
+    yearMode: 'ALL_YEARS',
+    yearDepartments: {},
+  };
 }
 
 /**
  * Switching scope never carries department ids across: FACULTY must send none,
- * and a fresh DEPARTMENTS selection starts empty. The years/levels are kept
- * and re-checked against the ladder the new scope resolves to.
+ * and a fresh DEPARTMENTS selection starts empty. The years/levels are kept:
+ * a whole-college material's years become empty year groups (each then gets
+ * its own departments), and a per-year material's groups become the
+ * whole-college years.
  */
 export function selectScope(
   draft: AudienceDraft,
   scope: LibraryDepartmentScope,
 ): AudienceDraft {
   if (scope === draft.departmentScope) return draft;
-  return { ...draft, departmentScope: scope, departmentIds: [] };
+  if (scope === 'DEPARTMENTS' && draft.academicYearIds.length > 0) {
+    return {
+      ...draft,
+      departmentScope: scope,
+      departmentIds: [],
+      yearMode: 'SELECTED_YEARS',
+      yearDepartments: Object.fromEntries(draft.academicYearIds.map((id) => [id, []])),
+    };
+  }
+  return {
+    ...draft,
+    departmentScope: scope,
+    departmentIds: [],
+    yearMode: 'ALL_YEARS',
+    yearDepartments: {},
+  };
+}
+
+/**
+ * DEPARTMENTS: one list for every year, or departments per year/level.
+ *
+ * To per-year: no year groups yet (the single list is not copied into
+ * groups the administrator did not create). Back to all years: the union of
+ * the groups becomes the single list, so no department is dropped, but the
+ * per-year distinction is.
+ */
+export function selectYearMode(draft: AudienceDraft, mode: LibraryYearScope): AudienceDraft {
+  if (draft.departmentScope !== 'DEPARTMENTS' || mode === draft.yearMode) return draft;
+  if (mode === 'SELECTED_YEARS') {
+    return { ...draft, yearMode: mode, departmentIds: [], academicYearIds: [], yearDepartments: {} };
+  }
+  return {
+    ...draft,
+    yearMode: mode,
+    departmentIds: unionOfGroups(draft.academicYearIds, draft.yearDepartments),
+    academicYearIds: [],
+    yearDepartments: {},
+  };
+}
+
+/** A new, empty year group. Adding a year already listed changes nothing. */
+export function addYearGroup(draft: AudienceDraft, academicYearId: string): AudienceDraft {
+  if (!isPerYear(draft) || !academicYearId || draft.academicYearIds.includes(academicYearId)) {
+    return draft;
+  }
+  return {
+    ...draft,
+    academicYearIds: [...draft.academicYearIds, academicYearId],
+    yearDepartments: { ...draft.yearDepartments, [academicYearId]: [] },
+  };
+}
+
+/** Removes one year group and its departments; every other group is untouched. */
+export function removeYearGroup(draft: AudienceDraft, academicYearId: string): AudienceDraft {
+  if (!draft.academicYearIds.includes(academicYearId)) return draft;
+  const academicYearIds = draft.academicYearIds.filter((id) => id !== academicYearId);
+  const yearDepartments = { ...draft.yearDepartments };
+  delete yearDepartments[academicYearId];
+  return {
+    ...draft,
+    academicYearIds,
+    yearDepartments,
+    departmentIds: isPerYear(draft) ? unionOfGroups(academicYearIds, yearDepartments) : draft.departmentIds,
+  };
+}
+
+/** Sets one year group's departments; no other group moves. */
+export function setYearDepartments(
+  draft: AudienceDraft,
+  academicYearId: string,
+  departmentIds: string[],
+): AudienceDraft {
+  if (!isPerYear(draft) || !draft.academicYearIds.includes(academicYearId)) return draft;
+  const yearDepartments = { ...draft.yearDepartments, [academicYearId]: [...new Set(departmentIds)] };
+  return {
+    ...draft,
+    yearDepartments,
+    departmentIds: unionOfGroups(draft.academicYearIds, yearDepartments),
+  };
+}
+
+export function toggleYearDepartment(
+  draft: AudienceDraft,
+  academicYearId: string,
+  departmentId: string,
+  checked: boolean,
+): AudienceDraft {
+  const current = draft.yearDepartments[academicYearId] ?? [];
+  if (checked === current.includes(departmentId)) return draft;
+  return setYearDepartments(
+    draft,
+    academicYearId,
+    checked ? [...current, departmentId] : current.filter((id) => id !== departmentId),
+  );
+}
+
+/**
+ * Would going from `before` to `after` drop anything the administrator chose?
+ * Used to ask before a university, college, scope or year-mode change throws
+ * a selection away. Ticking and unticking one box is never asked about.
+ */
+export function discardsSelection(before: AudienceDraft, after: AudienceDraft): boolean {
+  const chosen = (d: AudienceDraft) =>
+    new Set([
+      ...d.departmentIds.map((id) => `d:${id}`),
+      ...d.academicYearIds.map((id) => `y:${id}`),
+      ...(isPerYear(d)
+        ? d.academicYearIds.flatMap((y) => (d.yearDepartments[y] ?? []).map((id) => `p:${y}/${id}`))
+        : []),
+    ]);
+  const kept = chosen(after);
+  for (const item of chosen(before)) if (!kept.has(item)) return true;
+  return false;
 }
 
 export function toggleDepartment(
@@ -275,6 +466,53 @@ export function ladderLabel(kind: AcademicStructureKind | null): string {
   return 'Year / level';
 }
 
+/**
+ * Every department's own ladder, for choosing departments per year. A
+ * department is offered under a year/level only when that rung is on its
+ * ladder — the same rule the backend applies to each year group.
+ */
+export interface DepartmentLadders {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  byDepartment: Record<string, AcademicYear[]>;
+  retry?: () => void;
+}
+
+export const IDLE_DEPARTMENT_LADDERS: DepartmentLadders = Object.freeze({
+  status: 'idle',
+  byDepartment: {},
+}) as DepartmentLadders;
+
+/**
+ * The year/level options for a per-year audience: every rung on the ladder of
+ * at least one department (of the locked track, once one is ticked), in
+ * ladder order.
+ */
+export function perYearRungs(
+  departments: Pick<Department, 'id' | 'studyType'>[],
+  ladders: DepartmentLadders,
+  track: StudyTrack | 'MIXED' | null,
+): AcademicYear[] {
+  const seen = new Map<string, AcademicYear>();
+  for (const department of departments) {
+    if (track && track !== 'MIXED' && trackOfDepartment(department) !== track) continue;
+    for (const rung of ladders.byDepartment[department.id] ?? []) {
+      if (!seen.has(rung.id)) seen.set(rung.id, rung);
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+}
+
+/** The departments whose own ladder holds this rung. */
+export function departmentsForRung<T extends Pick<Department, 'id'>>(
+  departments: T[],
+  ladders: DepartmentLadders,
+  academicYearId: string,
+): T[] {
+  return departments.filter((d) =>
+    (ladders.byDepartment[d.id] ?? []).some((rung) => rung.id === academicYearId),
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Validation — what the form refuses before the backend has to
 // ---------------------------------------------------------------------------
@@ -285,20 +523,29 @@ export interface AudienceContext {
   /** Active colleges of the chosen university, once loaded. */
   faculties?: Pick<Faculty, 'id'>[];
   /** Active departments of the chosen college, once loaded. */
-  departments?: Pick<Department, 'id' | 'studyType'>[];
+  departments?: (Pick<Department, 'id' | 'studyType'> & Partial<Pick<Department, 'name'>>)[];
   ladder: LadderState;
+  /** Every department's own ladder, for a per-year audience. */
+  departmentLadders?: DepartmentLadders;
 }
 
 export type AudienceField = keyof AudienceDraft;
 
 export interface AudienceCheck {
+  /**
+   * Field errors. A per-year audience with any group problem also carries
+   * `yearDepartments`, so "is anything wrong" stays one question.
+   */
   errors: Partial<Record<AudienceField, string>>;
+  /** Per year group (by year/level id): the message shown beside that group. */
+  groupErrors: Record<string, string>;
   /** Something needed to validate is still loading; not an error, but not ready. */
   pending: boolean;
 }
 
 export function checkAudience(draft: AudienceDraft, ctx: AudienceContext): AudienceCheck {
   const errors: Partial<Record<AudienceField, string>> = {};
+  const groupErrors: Record<string, string> = {};
   let pending = false;
 
   if (!draft.universityId) errors.universityId = 'Choose a university.';
@@ -313,6 +560,10 @@ export function checkAudience(draft: AudienceDraft, ctx: AudienceContext): Audie
 
   if (draft.departmentScope === 'FACULTY' && draft.departmentIds.length > 0) {
     errors.departmentIds = 'A whole-college material has no department selection.';
+  }
+
+  if (isPerYear(draft) && draft.facultyId) {
+    return checkPerYear(draft, ctx, errors, groupErrors, pending);
   }
 
   if (draft.departmentScope === 'DEPARTMENTS' && draft.facultyId) {
@@ -359,7 +610,77 @@ export function checkAudience(draft: AudienceDraft, ctx: AudienceContext): Audie
     }
   }
 
-  return { errors, pending };
+  return { errors, groupErrors, pending };
+}
+
+/** Departments chosen per year/level: every group checked on its own. */
+function checkPerYear(
+  draft: AudienceDraft,
+  ctx: AudienceContext,
+  errors: Partial<Record<AudienceField, string>>,
+  groupErrors: Record<string, string>,
+  pendingSoFar: boolean,
+): AudienceCheck {
+  let pending = pendingSoFar;
+  const years = draft.academicYearIds;
+  const ladders = ctx.departmentLadders ?? IDLE_DEPARTMENT_LADDERS;
+  const rungs = Object.values(ladders.byDepartment).flat();
+  const kind = rungs[0]?.kind ?? null;
+  const label = ladderLabel(kind).toLowerCase();
+
+  if (years.length === 0) {
+    errors.academicYearIds = `Add at least one ${label}, or choose All years.`;
+  } else if (years.length > MAX_ACADEMIC_YEARS) {
+    errors.academicYearIds = `Choose at most ${MAX_ACADEMIC_YEARS} ${label}s.`;
+  }
+
+  if (!ctx.departments) {
+    pending = true;
+  } else {
+    const known = new Map(ctx.departments.map((d) => [d.id, d]));
+    if (selectionTrack(ctx.departments, draft.departmentIds) === 'MIXED') {
+      errors.departmentIds = 'General and Programs departments cannot be combined in one material.';
+    }
+    if (ladders.status === 'error') {
+      errors.academicYearIds =
+        'Cannot be checked until the years/levels load. Retry below, or choose All years.';
+    } else if (ladders.status !== 'ready') {
+      pending = pending || years.length > 0;
+    }
+    for (const year of years) {
+      const chosen = draft.yearDepartments[year] ?? [];
+      const rungName = rungs.find((rung) => rung.id === year)?.name ?? `this ${label}`;
+      if (chosen.length === 0) {
+        groupErrors[year] = `Choose at least one department for ${rungName}.`;
+        continue;
+      }
+      const unavailable = chosen.filter((id) => !known.has(id));
+      if (unavailable.length > 0) {
+        groupErrors[year] =
+          unavailable.length === 1
+            ? 'One department here is no longer offered by this college. Untick it.'
+            : `${unavailable.length} departments here are no longer offered by this college. Untick them.`;
+        continue;
+      }
+      if (ladders.status !== 'ready') continue;
+      if (!rungs.some((rung) => rung.id === year)) {
+        groupErrors[year] = `This ${label} is not on any ladder of this college. Remove it.`;
+        continue;
+      }
+      const offLadder = chosen.filter(
+        (id) => !(ladders.byDepartment[id] ?? []).some((rung) => rung.id === year),
+      );
+      if (offLadder.length > 0) {
+        const names = offLadder.map((id) => known.get(id)?.name ?? 'A department').join(', ');
+        groupErrors[year] = `${names} cannot be filed under ${rungName}: it is not on their ladder. Untick them.`;
+      }
+    }
+  }
+
+  if (Object.keys(groupErrors).length > 0) {
+    errors.yearDepartments = 'Some years/levels need attention.';
+  }
+  return { errors, groupErrors, pending };
 }
 
 // ---------------------------------------------------------------------------
@@ -373,30 +694,51 @@ export function checkAudience(draft: AudienceDraft, ctx: AudienceContext): Audie
  * in ladder order whatever is sent here).
  */
 export function audiencePayload(draft: AudienceDraft): LibraryAudienceInput {
-  const academicYearIds = [...new Set(draft.academicYearIds)];
+  const perYear = isPerYear(draft);
+  const academicYearIds =
+    draft.departmentScope === 'DEPARTMENTS' && !perYear ? [] : [...new Set(draft.academicYearIds)];
+  const audienceMappings: LibraryAudienceMapping[] = perYear
+    ? academicYearIds.map((academicYearId) => ({
+        academicYearId,
+        departmentIds: [...new Set(draft.yearDepartments[academicYearId] ?? [])],
+      }))
+    : [];
   return {
     universityId: draft.universityId,
     facultyId: draft.facultyId,
     departmentScope: draft.departmentScope,
     departmentIds:
-      draft.departmentScope === 'DEPARTMENTS' ? [...new Set(draft.departmentIds)] : [],
+      draft.departmentScope !== 'DEPARTMENTS'
+        ? []
+        : perYear
+          ? [...new Set(audienceMappings.flatMap((m) => m.departmentIds))]
+          : [...new Set(draft.departmentIds)],
     academicYearId: academicYearIds[0] ?? null,
     academicYearIds,
+    yearScope: perYear || academicYearIds.length > 0 ? 'SELECTED_YEARS' : 'ALL_YEARS',
+    audienceMappings,
   };
 }
 
-/** Same audience, whatever order the departments or years were ticked in. */
+/** Same audience, whatever order the departments, years or groups were ticked in. */
 export function sameAudience(a: AudienceDraft, b: AudienceDraft): boolean {
   const pa = audiencePayload(a);
   const pb = audiencePayload(b);
   const sameSet = (x: string[], y: string[]) =>
     x.length === y.length && x.every((id) => y.includes(id));
+  const groups = (p: LibraryAudienceInput) =>
+    new Map(p.audienceMappings.map((m) => [m.academicYearId, m.departmentIds]));
+  const ga = groups(pa);
+  const gb = groups(pb);
   return (
     pa.universityId === pb.universityId &&
     pa.facultyId === pb.facultyId &&
     pa.departmentScope === pb.departmentScope &&
+    pa.yearScope === pb.yearScope &&
     sameSet(pa.academicYearIds, pb.academicYearIds) &&
-    sameSet(pa.departmentIds, pb.departmentIds)
+    sameSet(pa.departmentIds, pb.departmentIds) &&
+    ga.size === gb.size &&
+    [...ga].every(([year, ids]) => sameSet(ids, gb.get(year) ?? []))
   );
 }
 
@@ -463,6 +805,8 @@ export interface AudienceSummary {
   reach: string;
   departments: string[];
   yearLevel: string;
+  /** "Level 000: MTE, Mechatronics", one per year group; empty otherwise. */
+  perYear: string[];
 }
 
 const NOT_SET = 'Not set';
@@ -495,7 +839,14 @@ export function summarizeSaved(
   audience: LibraryMaterialAudience | undefined | null,
 ): AudienceSummary {
   const scope = audience?.departmentScope ?? 'FACULTY';
+  const perYear =
+    scope === 'DEPARTMENTS'
+      ? (audience?.mappings ?? []).map(
+          (m) => `${m.academicYear.name}: ${m.departments.map((d) => d.name).join(', ') || '—'}`,
+        )
+      : [];
   return {
+    perYear,
     university: audience?.university?.name ?? NOT_SET,
     college: audience?.faculty?.name ?? NOT_SET,
     reach: reachLabel(scope),
@@ -514,17 +865,28 @@ export function summarizeDraft(
     faculties?: Pick<Faculty, 'id' | 'name'>[];
     departments?: Pick<Department, 'id' | 'name' | 'studyType'>[];
     ladder: LadderState;
+    /** Rung names for a per-year audience (every department's ladder). */
+    rungs?: AcademicYear[];
   },
 ): AudienceSummary {
   const nameOf = (list: { id: string; name: string }[] | undefined, id: string) =>
     id ? (list?.find((item) => item.id === id)?.name ?? 'Unavailable') : NOT_SET;
-  const years = orderedAcademicYearIds(draft.academicYearIds, lookup.ladder.entries).map(
-    (id) => {
-      const entry = lookup.ladder.entries.find((rung) => rung.id === id);
-      return { name: entry?.name ?? 'Unavailable', kind: lookup.ladder.kind };
-    },
-  );
+  const perYearDraft = isPerYear(draft);
+  const rungList = perYearDraft ? (lookup.rungs ?? []) : lookup.ladder.entries;
+  const kind = perYearDraft ? (lookup.rungs?.[0]?.kind ?? null) : lookup.ladder.kind;
+  const years = orderedAcademicYearIds(draft.academicYearIds, rungList).map((id) => {
+    const entry = rungList.find((rung) => rung.id === id);
+    return { id, name: entry?.name ?? 'Unavailable', kind };
+  });
+  const departmentName = (id: string) =>
+    lookup.departments?.find((d) => d.id === id)?.name ?? 'Unavailable department';
   return {
+    perYear: perYearDraft
+      ? years.map(
+          (year) =>
+            `${year.name}: ${(draft.yearDepartments[year.id] ?? []).map(departmentName).join(', ') || '—'}`,
+        )
+      : [],
     university: nameOf(lookup.universities, draft.universityId),
     college: nameOf(lookup.faculties, draft.facultyId),
     reach: reachLabel(draft.departmentScope),
@@ -557,6 +919,11 @@ export function audienceDiff(
     { label: 'Reaches', before: before.reach, after: after.reach },
     { label: 'Departments', before: join(before.departments), after: join(after.departments) },
     { label: 'Year / level', before: before.yearLevel, after: after.yearLevel },
+    {
+      label: 'Departments per year / level',
+      before: before.perYear.length > 0 ? before.perYear.join('; ') : '—',
+      after: after.perYear.length > 0 ? after.perYear.join('; ') : '—',
+    },
   ];
   return rows.map((row) => ({ ...row, changed: row.before !== row.after }));
 }
@@ -573,8 +940,36 @@ export function audienceServerErrors(
     const messages = fields[key];
     if (messages && messages.length > 0) out[key] = sentence(messages.join('; '));
   }
-  const years = [...(fields.academicYearIds ?? []), ...(fields.academicYearId ?? [])];
+  const years = [
+    ...(fields.academicYearIds ?? []),
+    ...(fields.academicYearId ?? []),
+    ...(fields.yearScope ?? []),
+  ];
   if (years.length > 0) out.academicYearIds = sentence(years.join('; '));
+  if (fields.audienceMappings?.length) {
+    out.yearDepartments = sentence(fields.audienceMappings.join('; '));
+  } else if (Object.keys(fields).some((key) => key.startsWith('audienceMappings.'))) {
+    out.yearDepartments = 'Some years/levels need attention.';
+  }
+  return out;
+}
+
+/**
+ * Backend refusals of one year group (`audienceMappings.<i>.…`), keyed by the
+ * year/level id that group was sent with, so each lands beside its group.
+ */
+export function audienceServerGroupErrors(
+  fields: Record<string, string[]>,
+  sent: Pick<LibraryAudienceInput, 'audienceMappings'> | null,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, messages] of Object.entries(fields)) {
+    const match = /^audienceMappings\.(\d+)\./.exec(key);
+    const year = match ? sent?.audienceMappings[Number(match[1])]?.academicYearId : undefined;
+    if (!year || messages.length === 0) continue;
+    const text = sentence(messages.join('; '));
+    out[year] = out[year] ? `${out[year]} ${text}` : text;
+  }
   return out;
 }
 
@@ -595,6 +990,8 @@ export function describeFieldErrors(fields: Record<string, string[]>): string {
     departmentIds: 'Departments',
     academicYearId: 'Year / level',
     academicYearIds: 'Years / levels',
+    yearScope: 'Years / levels',
+    audienceMappings: 'Departments per year / level',
     coverKey: 'Cover image',
     partIds: 'Documents',
   };

@@ -484,6 +484,26 @@ export interface LibraryMaterialAudience {
    * the list still renders (it is then derived from `academicYear`).
    */
   academicYears?: LibraryAcademicYearRef[];
+  /** Absent from a backend that predates per-year departments. */
+  yearScope?: LibraryYearScope;
+  /**
+   * The departments listed under each year/level, in ladder order. Only a
+   * DEPARTMENTS material filed under specific years has any. Absent from a
+   * backend that predates per-year departments.
+   */
+  mappings?: {
+    academicYear: LibraryAcademicYearRef;
+    departments: (LibraryAudienceRef & { studyType: 'GENERAL' | 'PROGRAMS' })[];
+  }[];
+}
+
+/** "All years" or "specific years/levels", said explicitly. */
+export type LibraryYearScope = 'ALL_YEARS' | 'SELECTED_YEARS';
+
+/** One year/level and the departments that find the material under it. */
+export interface LibraryAudienceMapping {
+  academicYearId: string;
+  departmentIds: string[];
 }
 
 export interface LibraryMaterialRow {
@@ -565,7 +585,11 @@ export interface LibraryMaterialDetail {
   subjectId: string | null;
   /** Optional on the type only so a pre-audience backend still renders. */
   departmentScope?: LibraryDepartmentScope;
+  /** Every department the material reaches: the union over its years. */
   departmentIds?: string[];
+  yearScope?: LibraryYearScope;
+  /** Departments per year/level; absent from a backend that predates them. */
+  audienceMappings?: LibraryAudienceMapping[];
   audience?: LibraryMaterialAudience;
   /** Whether a cover of its own is set; the key itself is never sent. */
   hasCover?: boolean;
@@ -591,6 +615,14 @@ export interface LibraryAudienceInput {
   academicYearId: string | null;
   /** Every rung; empty means all years. */
   academicYearIds: string[];
+  /** Said explicitly, so "all years" is never inferred from an empty list. */
+  yearScope: LibraryYearScope;
+  /**
+   * DEPARTMENTS filed under specific years: each year with its own
+   * departments. Empty otherwise. `departmentIds` and `academicYearIds`
+   * then carry the union and the years, which the backend checks agree.
+   */
+  audienceMappings: LibraryAudienceMapping[];
 }
 
 export interface CreateMaterialInput extends LibraryAudienceInput {

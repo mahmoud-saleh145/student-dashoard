@@ -24,6 +24,9 @@ import {
   audienceDiff,
   audienceFromMaterial,
   audienceServerErrors,
+  audiencePayload,
+  audienceServerGroupErrors,
+  perYearRungs,
   checkAudience,
   createMaterialBody,
   describeFieldErrors,
@@ -136,9 +139,16 @@ export function MaterialDialog({
     faculties: data.faculties.data,
     departments: data.departments.data,
     ladder: data.ladder,
+    departmentLadders: data.departmentLadders,
   });
-  // The server's word wins over the form's guess for the field it names.
+  // The server's word wins over the form's guess for the field it names. A
+  // refusal of one year group is placed beside that group: the draft has not
+  // moved since it was posted (any change clears the refusal).
   const audienceErrors = { ...check.errors, ...audienceServerErrors(errors) };
+  const groupErrors = {
+    ...check.groupErrors,
+    ...audienceServerGroupErrors(errors, audiencePayload(audience)),
+  };
   const audienceBlocked =
     sendsAudience && (Object.keys(check.errors).length > 0 || check.pending);
 
@@ -354,6 +364,7 @@ export function MaterialDialog({
             onChange={changeAudience}
             data={data}
             errors={audienceErrors}
+            groupErrors={groupErrors}
             saved={material?.audience ?? null}
             disabled={pending}
           />
@@ -377,11 +388,13 @@ export function MaterialDialog({
 }
 
 function lookupOf(data: ReturnType<typeof useLibraryAudienceData>) {
+  const departments = data.departments.data ?? [];
   return {
     universities: data.universities.data,
     faculties: data.faculties.data,
     departments: data.departments.data,
     ladder: data.ladder,
+    rungs: perYearRungs(departments, data.departmentLadders, null),
   };
 }
 
