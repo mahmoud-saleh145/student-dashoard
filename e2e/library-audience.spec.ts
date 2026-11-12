@@ -170,6 +170,8 @@ function material(over: Record<string, unknown> = {}) {
     subjectId: 'subj-1',
     departmentScope: 'DEPARTMENTS',
     departmentIds: ['prep'],
+    yearScope: 'SELECTED_YEARS',
+    audienceMappings: [{ academicYearId: 'y-prep', departmentIds: ['prep'] }],
     audience: {
       university: { id: 'uni-mans', name: 'Mansoura University', nameAr: 'جامعة المنصورة' },
       faculty: { id: 'fac-gen', name: 'Engineering (General)', nameAr: 'هندسة عام' },
@@ -180,6 +182,13 @@ function material(over: Record<string, unknown> = {}) {
       academicYear: { id: 'y-prep', name: 'Preparatory year', nameAr: 'اعدادي', kind: 'YEAR' },
       academicYears: [
         { id: 'y-prep', name: 'Preparatory year', nameAr: 'اعدادي', kind: 'YEAR' },
+      ],
+      yearScope: 'SELECTED_YEARS',
+      mappings: [
+        {
+          academicYear: { id: 'y-prep', name: 'Preparatory year', nameAr: 'اعدادي', kind: 'YEAR' },
+          departments: [{ id: 'prep', name: 'Preparatory', nameAr: 'اعدادي', studyType: 'GENERAL' }],
+        },
       ],
     },
     hasCover: false,
@@ -324,7 +333,29 @@ const AUDIENCE_KEYS = [
   'departmentIds',
   'academicYearId',
   'academicYearIds',
+  'yearScope',
+  'audienceMappings',
 ];
+
+/** One year/level card of a per-year audience. */
+const yearCard = (dialog: ReturnType<Page['getByRole']>, id: string) =>
+  dialog.getByTestId(`year-group-${id}`);
+
+/** A department checkbox inside one year/level card. */
+const cardDepartment = (card: ReturnType<Page['getByRole']>, name: RegExp) =>
+  card.getByRole('checkbox', { name });
+
+/** The "+ Add year / level" picker of a per-year audience. */
+const addYear = (dialog: ReturnType<Page['getByRole']>) =>
+  dialog.getByRole('combobox', { name: /^Add (year|level|year \/ level)$/ });
+
+/** Confirms a change that throws a selection away. */
+async function discard(dialog: ReturnType<Page['getByRole']>) {
+  await dialog
+    .getByTestId('audience-discard-confirm')
+    .getByRole('button', { name: 'Discard and change' })
+    .click();
+}
 
 /** The years/levels control: one checkbox per rung of the audience's ladder. */
 const yearGroup = (dialog: ReturnType<Page['getByRole']>) => dialog.getByTestId('academic-years');
@@ -445,7 +476,7 @@ test.describe('library audience — creating a material', () => {
     });
   });
 
-  test('a department material is created with its departments and year', async ({ page }) => {
+  test('a department material is created with its departments under a year', async ({ page }) => {
     const writes = await serveLibrary(page, material());
     const dialog = await openNewMaterial(page);
     await dialog.getByRole('textbox', { name: /^Title(?! \(Arabic)/ }).fill('Mechanica');
@@ -457,13 +488,18 @@ test.describe('library audience — creating a material', () => {
     await expect(dialog).toContainText('Choose at least one department.');
     await expect(create).toBeDisabled();
 
-    await department(dialog, /Preparatory/).check();
-    await department(dialog, /Civil/).check();
-    const years = yearGroup(dialog);
-    await expect(years.getByRole('checkbox', { name: 'First year' })).toBeEnabled();
-    await years.getByRole('checkbox', { name: 'First year' }).check();
+    // Years are chosen per year now: one card per year, its own departments.
+    await dialog.getByRole('radio', { name: /Choose departments per year/ }).check();
+    await expect(dialog).toContainText('or choose All years');
+    await expect(create).toBeDisabled();
+    await addYear(dialog).selectOption('y-1');
+    const first = yearCard(dialog, 'y-1');
+    await expect(first).toContainText('Choose at least one department for First year');
+    await expect(create).toBeDisabled();
+    await cardDepartment(first, /^Preparatory/).check();
+    await cardDepartment(first, /^Civil/).check();
     await expect(dialog.getByTestId('audience-path')).toHaveText(
-      'Mansoura University → Engineering (General) → Preparatory, Civil',
+      'Mansoura University → Engineering (General) → 2 departments across 1 year/level',
     );
 
     await create.click();
@@ -476,6 +512,8 @@ test.describe('library audience — creating a material', () => {
       departmentIds: ['prep', 'civil'],
       academicYearId: 'y-1',
       academicYearIds: ['y-1'],
+      yearScope: 'SELECTED_YEARS',
+      audienceMappings: [{ academicYearId: 'y-1', departmentIds: ['prep', 'civil'] }],
     });
   });
 
@@ -559,38 +597,70 @@ test.describe('library audience — General/Programs and YEAR/LEVEL', () => {
       'Unavailable while Programs departments are ticked',
     );
 
-    await expect(dialog.getByText('Levels (optional)')).toBeVisible();
-    await expect(years.getByRole('checkbox')).toHaveCount(2);
-    await expect(years.getByRole('checkbox', { name: 'Level 000' })).toBeVisible();
-    await expect(years.getByRole('checkbox', { name: 'Level 100' })).toBeVisible();
-
     // Untick, and the General department is available again.
     await department(dialog, /CCE/).uncheck();
     await expect(department(dialog, /Architecture/)).toBeEnabled();
+
+    // Per year: both ladders are offered until a track is ticked ...
+    await dialog.getByRole('radio', { name: /Choose departments per year/ }).check();
+    const picker = addYear(dialog);
+    await expect(picker).toHaveAccessibleName('Add year / level');
+    await expect(picker.locator('option:not([value=""])')).toHaveText([
+      'Level 000',
+      'Preparatory year',
+      'First year',
+      'Level 100',
+    ]);
+    // ... a Level offers only the departments on the LEVEL ladder ...
+    await picker.selectOption('l-000');
+    const level0 = yearCard(dialog, 'l-000');
+    await expect(cardDepartment(level0, /^CCE/)).toBeVisible();
+    await expect(cardDepartment(level0, /^Mechatronics/)).toBeVisible();
+    await expect(cardDepartment(level0, /^Architecture/)).toHaveCount(0);
+    // ... and once Programs is ticked, only Levels remain to add.
+    await cardDepartment(level0, /^CCE/).check();
+    await expect(addYear(dialog)).toHaveAccessibleName('Add level');
+    await expect(addYear(dialog).locator('option:not([value=""])')).toHaveText(['Level 100']);
   });
 
-  test('a year chosen for one ladder is refused once the departments resolve to another', async ({
+  test('a department saved under a year its ladder does not have is flagged, blocking, and removable', async ({
     page,
   }) => {
+    // Whole-college years carry over as empty year groups on Selected departments.
     await serveLibrary(page, material());
-    const dialog = await openNewMaterial(page);
-    await dialog.getByRole('textbox', { name: /^Title(?! \(Arabic)/ }).fill('Mechanica');
-    await dialog.getByRole('combobox', { name: /^University/ }).selectOption('uni-mans');
-    await dialog.getByRole('combobox', { name: /^College/ }).selectOption('fac-mix');
-    const years = yearGroup(dialog);
-    await years.getByRole('checkbox', { name: 'First year' }).check();
+    const created = await openNewMaterial(page);
+    await created.getByRole('combobox', { name: /^University/ }).selectOption('uni-mans');
+    await created.getByRole('combobox', { name: /^College/ }).selectOption('fac-mix');
+    await yearGroup(created).getByRole('checkbox', { name: 'First year' }).check();
+    await created.getByRole('radio', { name: /Selected departments/ }).check();
+    const carried = yearCard(created, 'y-1');
+    await expect(carried).toBeVisible();
+    await expect(cardDepartment(carried, /^Architecture/)).toBeVisible();
+    await expect(cardDepartment(carried, /^CCE/)).toHaveCount(0);
+    await page.keyboard.press('Escape');
 
-    await dialog.getByRole('radio', { name: /Selected departments/ }).check();
-    await department(dialog, /CCE/).check();
-
-    // Never silently kept: flagged by name, blocking, and removable.
-    await expect(dialog).toContainText('not part of the ladder for this audience');
-    const stale = dialog.getByTestId('unavailable-years');
-    await expect(stale).toContainText('First year');
-    await expect(dialog.getByRole('button', { name: 'Create material' })).toBeDisabled();
-    await stale.getByRole('button', { name: 'Remove' }).click();
-    await expect(dialog.getByTestId('unavailable-years')).toHaveCount(0);
-    await expect(dialog.getByRole('button', { name: 'Create material' })).toBeEnabled();
+    // A saved CCE under First year (a YEAR rung, CCE counts in Levels).
+    const stale = material({
+      facultyId: 'fac-mix',
+      academicYearId: 'y-1',
+      academicYearIds: ['y-1'],
+      departmentIds: ['arch', 'cce'],
+      audienceMappings: [{ academicYearId: 'y-1', departmentIds: ['arch', 'cce'] }],
+    });
+    const writes = await serveLibrary(page, stale);
+    const dialog = await openEditMaterial(page);
+    const card = yearCard(dialog, 'y-1');
+    await expect(card.getByTestId('year-group-stray')).toContainText('CCE');
+    await expect(card).toContainText('CCE cannot be filed under First year');
+    await card.getByTestId('year-group-stray').getByRole('button', { name: 'Untick' }).click();
+    await expect(card.getByTestId('year-group-stray')).toHaveCount(0);
+    await expect(card.getByTestId('year-group-error')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Review changes' }).click();
+    await page.getByRole('button', { name: 'Apply audience change' }).click();
+    await expect(page.getByRole('dialog')).toBeHidden();
+    expect(writes.find((w) => w.method === 'PATCH')?.body.audienceMappings).toEqual([
+      { academicYearId: 'y-1', departmentIds: ['arch'] },
+    ]);
   });
 });
 
@@ -599,7 +669,7 @@ test.describe('library audience — General/Programs and YEAR/LEVEL', () => {
 // ---------------------------------------------------------------------------
 
 test.describe('library audience — dependent fields', () => {
-  test('changing the university or the college clears everything below it', async ({
+  test('changing the university or the college asks first, then clears everything below it', async ({
     page,
   }) => {
     await serveLibrary(page, material());
@@ -608,28 +678,33 @@ test.describe('library audience — dependent fields', () => {
     await dialog.getByRole('combobox', { name: /^College/ }).selectOption('fac-gen');
     await dialog.getByRole('radio', { name: /Selected departments/ }).check();
     await department(dialog, /Preparatory/).check();
-    await yearGroup(dialog).getByRole('checkbox', { name: 'First year' }).check();
 
-    // The year/level never moves the college or the departments.
+    // Asked first; keeping the selection changes nothing.
+    await dialog.getByRole('combobox', { name: /^College/ }).selectOption('fac-mix');
+    await expect(dialog.getByTestId('audience-discard-confirm')).toContainText(
+      'Changing the college clears',
+    );
+    await dialog.getByRole('button', { name: 'Keep current selection' }).click();
     await expect(dialog.getByRole('combobox', { name: /^College/ })).toHaveValue('fac-gen');
     await expect(department(dialog, /Preparatory/)).toBeChecked();
 
-    // College change: departments and years go.
+    // College change: departments go, nothing from the old college is kept.
     await dialog.getByRole('combobox', { name: /^College/ }).selectOption('fac-mix');
+    await discard(dialog);
+    await expect(dialog.getByRole('combobox', { name: /^College/ })).toHaveValue('fac-mix');
     await expect(department(dialog, /Preparatory/)).toHaveCount(0);
     await expect(department(dialog, /Architecture/)).not.toBeChecked();
-    // No department ticked yet on the new college, so no ladder to offer —
-    // and nothing from the old one is kept.
-    await expect(yearGroup(dialog)).toContainText('Choose departments first');
-    await expect(yearGroup(dialog)).toContainText('Any — no year/level filter');
-    await expect(yearGroup(dialog).getByRole('checkbox')).toHaveCount(0);
 
     // University change: college goes too.
     await department(dialog, /Architecture/).check();
     await dialog.getByRole('combobox', { name: /^University/ }).selectOption('uni-delta');
+    await discard(dialog);
     await expect(dialog.getByRole('combobox', { name: /^College/ })).toHaveValue('');
     await expect(dialog.getByRole('checkbox')).toHaveCount(0);
-    await expect(yearGroup(dialog)).toContainText('Choose a college first');
+
+    // Nothing chosen yet: a change needs no confirmation.
+    await dialog.getByRole('combobox', { name: /^University/ }).selectOption('uni-mans');
+    await expect(dialog.getByTestId('audience-discard-confirm')).toHaveCount(0);
   });
 
   test('switching to Entire college drops the department selection', async ({ page }) => {
@@ -640,7 +715,9 @@ test.describe('library audience — dependent fields', () => {
     await dialog.getByRole('combobox', { name: /^College/ }).selectOption('fac-gen');
     await dialog.getByRole('radio', { name: /Selected departments/ }).check();
     await department(dialog, /Civil/).check();
-    await dialog.getByRole('radio', { name: /Entire college/ }).check();
+    // Clicked, not checked: the radio waits for the confirmation.
+    await dialog.getByRole('radio', { name: /Entire college/ }).click();
+    await discard(dialog);
     await dialog.getByRole('radio', { name: /Selected departments/ }).check();
     await expect(department(dialog, /Civil/)).not.toBeChecked();
     await dialog.getByRole('radio', { name: /Entire college/ }).check();
@@ -668,11 +745,11 @@ test.describe('library audience — editing a material', () => {
     await expect(dialog.getByRole('combobox', { name: /^University/ })).toHaveValue('uni-mans');
     await expect(dialog.getByRole('combobox', { name: /^College/ })).toHaveValue('fac-gen');
     await expect(dialog.getByRole('radio', { name: /Selected departments/ })).toBeChecked();
-    await expect(department(dialog, /Preparatory/)).toBeChecked();
-    await expect(department(dialog, /Civil/)).not.toBeChecked();
-    const years = yearGroup(dialog);
-    await expect(years.getByRole('checkbox', { name: 'Preparatory year' })).toBeChecked();
-    await expect(years.getByRole('checkbox', { name: 'First year' })).not.toBeChecked();
+    await expect(dialog.getByRole('radio', { name: /Choose departments per year/ })).toBeChecked();
+    const prepYear = yearCard(dialog, 'y-prep');
+    await expect(cardDepartment(prepYear, /^Preparatory/)).toBeChecked();
+    await expect(cardDepartment(prepYear, /^Civil/)).not.toBeChecked();
+    await expect(yearCard(dialog, 'y-1')).toHaveCount(0);
 
     await dialog.getByRole('textbox', { name: /^Title(?! \(Arabic)/ }).fill('Mechanica 2027');
     await dialog.getByRole('button', { name: 'Save changes' }).click();
@@ -692,7 +769,9 @@ test.describe('library audience — editing a material', () => {
     const writes = await serveLibrary(page, material());
     const dialog = await openEditMaterial(page);
 
-    await dialog.getByRole('radio', { name: /Entire college/ }).check();
+    // Clicked, not checked: the radio waits for the confirmation.
+    await dialog.getByRole('radio', { name: /Entire college/ }).click();
+    await discard(dialog);
     await dialog.getByRole('button', { name: 'Clear years' }).click();
     await dialog.getByRole('button', { name: 'Review changes' }).click();
 
@@ -703,11 +782,13 @@ test.describe('library audience — editing a material', () => {
       'Reaches',
       'Departments',
       'Year / level',
+      'Departments per year / level',
     ]);
     await expect(table).toContainText('Selected departments only');
     await expect(table).toContainText('Entire college — every department');
     await expect(table).toContainText('Preparatory (General)');
     await expect(table).toContainText('Preparatory year (Year)');
+    await expect(table).toContainText('Preparatory year: Preparatory');
     await expect(review).toContainText('Existing purchases are not revoked.');
     await expect(review).toContainText('published');
     await expect(review).toContainText('audit log');
@@ -725,6 +806,8 @@ test.describe('library audience — editing a material', () => {
       departmentIds: [],
       academicYearId: null,
       academicYearIds: [],
+      yearScope: 'ALL_YEARS',
+      audienceMappings: [],
     });
     for (const key of AUDIENCE_KEYS) expect(patch?.body).toHaveProperty(key);
   });
@@ -733,13 +816,18 @@ test.describe('library audience — editing a material', () => {
     const writes = await serveLibrary(page, material());
     const dialog = await openEditMaterial(page);
 
-    await yearGroup(dialog).getByRole('checkbox', { name: 'First year' }).check();
+    await addYear(dialog).selectOption('y-1');
+    await cardDepartment(yearCard(dialog, 'y-1'), /^Preparatory/).check();
     await dialog.getByRole('button', { name: 'Review changes' }).click();
 
     const review = page.getByRole('dialog', { name: 'Change who can see this material?' });
     const table = review.getByTestId('audience-change-review');
-    await expect(table.locator('tr[data-changed="true"] th')).toHaveText(['Year / level']);
+    await expect(table.locator('tr[data-changed="true"] th')).toHaveText([
+      'Year / level',
+      'Departments per year / level',
+    ]);
     await expect(table).toContainText('Preparatory year, First year (Year)');
+    await expect(table).toContainText('Preparatory year: Preparatory; First year: Preparatory');
 
     await review.getByRole('button', { name: 'Apply audience change' }).click();
     await expect(review).toBeHidden();
@@ -749,18 +837,22 @@ test.describe('library audience — editing a material', () => {
       departmentIds: ['prep'],
       academicYearIds: ['y-prep', 'y-1'],
       academicYearId: 'y-prep',
+      audienceMappings: [
+        { academicYearId: 'y-prep', departmentIds: ['prep'] },
+        { academicYearId: 'y-1', departmentIds: ['prep'] },
+      ],
     });
   });
 
   test('Back from the review returns to the form and sends nothing', async ({ page }) => {
     const writes = await serveLibrary(page, material());
     const dialog = await openEditMaterial(page);
-    await department(dialog, /Civil/).check();
+    await cardDepartment(yearCard(dialog, 'y-prep'), /^Civil/).check();
     await dialog.getByRole('button', { name: 'Review changes' }).click();
     await page.getByRole('button', { name: 'Back' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Edit material' })).toBeVisible();
-    await expect(department(dialog, /Civil/)).toBeChecked();
+    await expect(cardDepartment(yearCard(dialog, 'y-prep'), /^Civil/)).toBeChecked();
     expect(writes).toHaveLength(0);
   });
 
@@ -771,7 +863,7 @@ test.describe('library audience — editing a material', () => {
         : null,
     );
     const dialog = await openEditMaterial(page);
-    await department(dialog, /Civil/).check();
+    await cardDepartment(yearCard(dialog, 'y-prep'), /^Civil/).check();
     await dialog.getByRole('button', { name: 'Review changes' }).click();
     await page.getByRole('button', { name: 'Apply audience change' }).click();
 
@@ -785,6 +877,7 @@ test.describe('library audience — editing a material', () => {
   }) => {
     const stale = material({
       departmentIds: ['prep', 'old-dept'],
+      audienceMappings: [{ academicYearId: 'y-prep', departmentIds: ['prep', 'old-dept'] }],
       audience: {
         ...material().audience,
         departments: [
@@ -796,17 +889,20 @@ test.describe('library audience — editing a material', () => {
     const writes = await serveLibrary(page, stale);
     const dialog = await openEditMaterial(page);
 
-    const unavailable = dialog.getByTestId('unavailable-departments');
+    const card = yearCard(dialog, 'y-prep');
+    const unavailable = card.getByTestId('year-group-stray');
     await expect(unavailable).toContainText('Retired Department');
-    await expect(dialog).toContainText('no longer offered by this college');
+    await expect(card).toContainText('no longer offered by this college');
 
-    await unavailable.getByRole('button', { name: 'Remove' }).click();
-    await expect(dialog.getByTestId('unavailable-departments')).toHaveCount(0);
+    await unavailable.getByRole('button', { name: 'Untick' }).click();
+    await expect(card.getByTestId('year-group-stray')).toHaveCount(0);
     await dialog.getByRole('button', { name: 'Review changes' }).click();
     await page.getByRole('button', { name: 'Apply audience change' }).click();
     await expect(page.getByRole('dialog')).toBeHidden();
 
-    expect(writes.find((w) => w.method === 'PATCH')?.body.departmentIds).toEqual(['prep']);
+    const body = writes.find((w) => w.method === 'PATCH')?.body;
+    expect(body?.departmentIds).toEqual(['prep']);
+    expect(body?.audienceMappings).toEqual([{ academicYearId: 'y-prep', departmentIds: ['prep'] }]);
   });
 });
 
@@ -1046,12 +1142,12 @@ test.describe('library audience — transient ladder failure', () => {
     await dialog.getByRole('combobox', { name: /^University/ }).selectOption('uni-mans');
     await dialog.getByRole('combobox', { name: /^College/ }).selectOption('fac-gen');
     await dialog.getByRole('radio', { name: /Selected departments/ }).check();
-    await department(dialog, /Preparatory/).check();
-    await yearGroup(dialog).getByRole('checkbox', { name: 'First year' }).check();
-    await department(dialog, /Civil/).check();
+    await dialog.getByRole('radio', { name: /Choose departments per year/ }).check();
+    await addYear(dialog).selectOption('y-1');
+    await cardDepartment(yearCard(dialog, 'y-1'), /^Preparatory/).check();
 
     // The automatic retries run out, then the editor says so and offers Retry.
-    const error = dialog.getByTestId('ladder-error');
+    const error = dialog.getByTestId('department-ladders-error');
     await expect(error).toBeVisible({ timeout: 20_000 });
     await expect(error).toContainText('Your selections are kept.');
     await expect(dialog.getByRole('button', { name: 'Create material' })).toBeDisabled();
@@ -1059,23 +1155,21 @@ test.describe('library audience — transient ladder failure', () => {
     // Nothing chosen was cleared or replaced while it failed.
     await expect(dialog.getByRole('combobox', { name: /^University/ })).toHaveValue('uni-mans');
     await expect(dialog.getByRole('combobox', { name: /^College/ })).toHaveValue('fac-gen');
-    await expect(department(dialog, /Preparatory/)).toBeChecked();
-    await expect(department(dialog, /Civil/)).toBeChecked();
-    const unverified = dialog.getByTestId('unavailable-years');
-    await expect(unverified).toContainText('not verified until the years/levels load');
-    await expect(unverified).toContainText('First year');
+    await expect(cardDepartment(yearCard(dialog, 'y-1'), /^Preparatory/)).toBeChecked();
+    // Civil cannot be offered under a year until its own ladder has loaded.
+    await expect(cardDepartment(yearCard(dialog, 'y-1'), /^Civil/)).toHaveCount(0);
 
     const before = { ...counts };
     failCivil = false;
     await error.getByRole('button', { name: 'Retry' }).click();
-    await expect(dialog.getByTestId('ladder-error')).toHaveCount(0);
+    await expect(dialog.getByTestId('department-ladders-error')).toHaveCount(0);
 
     // Only the failed scope was asked again.
     expect(counts.civil).toBe((before.civil ?? 0) + 1);
     expect(counts.prep).toBe(before.prep);
 
-    await expect(yearGroup(dialog).getByRole('checkbox', { name: 'First year' })).toBeChecked();
-    await expect(dialog.getByTestId('unavailable-years')).toHaveCount(0);
+    await cardDepartment(yearCard(dialog, 'y-1'), /^Civil/).check();
+    await expect(cardDepartment(yearCard(dialog, 'y-1'), /^Preparatory/)).toBeChecked();
     await dialog.getByRole('button', { name: 'Create material' }).click();
     await expect(dialog).toBeHidden();
     expect(writes.find((w) => w.method === 'POST')?.body).toMatchObject({
@@ -1085,6 +1179,7 @@ test.describe('library audience — transient ladder failure', () => {
       departmentIds: ['prep', 'civil'],
       academicYearId: 'y-1',
       academicYearIds: ['y-1'],
+      audienceMappings: [{ academicYearId: 'y-1', departmentIds: ['prep', 'civil'] }],
     });
   });
 });
