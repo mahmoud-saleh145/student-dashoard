@@ -9,20 +9,28 @@ import { ConfirmDialog } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 import {
+  isMobileInFlight,
   isTerminalGumletFailure,
   useAdoptForGumlet,
   useCompleteVideoUpload,
   useDeleteVideo,
   useGumletAssetState,
+  useRetryMobileProcessing,
   useRetryVideoProcessing,
   useSyncGumletAsset,
   useVideoStatus,
 } from '@/features/videos/hooks';
+import {
+  MobilePipelinePanel,
+  PipelineSummary,
+  type LocalUploadPhase,
+} from '@/features/videos/pipeline-status';
 import { useTeacherCapabilities } from '@/features/settings/hooks';
 import { useVideoUpload, VIDEO_UPLOAD_MAX_LABEL, VIDEO_UPLOAD_TYPES } from '@/features/videos/upload';
 import { messageFor } from '@/lib/errors';
 import { formatBytes, formatDateTime, formatDuration } from '@/lib/format';
 import { queryKeys } from '@/lib/query-keys';
+import { useSession } from '@/lib/session-context';
 import type { VideoStatus } from '@/types/domain';
 
 /**
@@ -94,6 +102,8 @@ export function LessonVideoPanel({
   // and the row still says UPLOADING. Polling resumes the moment it is queued.
   const status = useVideoStatus(videoId, !upload.isBusy);
   const retry = useRetryVideoProcessing(courseId);
+  const retryMobile = useRetryMobileProcessing(courseId);
+  const { isAdmin } = useSession();
   const removeVideo = useDeleteVideo(courseId);
   const adoptGumlet = useAdoptForGumlet(courseId);
   const syncGumlet = useSyncGumletAsset(courseId);
@@ -136,6 +146,22 @@ export function LessonVideoPanel({
       void queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
     }
   }, [settledStatus, queryClient]);
+
+  // What the BROWSER knows about the transfer. The server cannot tell "the
+  // bytes are still moving" from "the tab was closed", and it never sees a PUT
+  // that failed; those two facts live here.
+  const localUpload: LocalUploadPhase = upload.isBusy
+    ? 'busy'
+    : upload.phase === 'error'
+      ? 'failed'
+      : upload.phase === 'unconfirmed'
+        ? 'unconfirmed'
+        : 'none';
+
+  // The web/Gumlet side is on Gumlet for every current upload; the wording of
+  // the failure block and its retry follows the pipeline that actually failed.
+  const onGumlet = detail?.drmProvider === 'gumlet';
+  const mobileInFlight = isMobileInFlight(detail?.mobile?.status);
 
   // The server's own answer wins as soon as there is one. Before that: the
   // status `complete` just reported, or the one the lecture row already
@@ -187,9 +213,37 @@ export function LessonVideoPanel({
     if (!videoId) return;
     try {
       await retry.mutateAsync(videoId);
-      toast.success('Processing restarted', 'The stored file is being transcoded again.');
+      toast.success(
+        onGumlet ? 'Gumlet processing restarted' : 'Processing restarted',
+        onGumlet
+          ? 'The stored file was sent to Gumlet again. The mobile version is not affected.'
+          : 'The stored file is being transcoded again.',
+      );
     } catch (error) {
-      toast.error(error, 'Processing could not be restarted');
+      toast.error(error, onGumlet ? 'Gumlet processing could not be restarted' : 'Processing could not be restarted');
+    }
+  }
+
+  /**
+   * Retries the MOBILE encode only. A different endpoint from `runRetry`, on
+   * purpose: retrying one pipeline must never reset the other.
+   */
+  async function runRetryMobile() {
+    if (!videoId) return;
+    try {
+      const result = await retryMobile.mutateAsync(videoId);
+      if (result.alreadyQueued) {
+        toast.success('Already queued', 'A mobile encode for this video is already waiting or running.');
+      } else {
+        toast.success(
+          'Mobile processing queued',
+          result.workerOnline === false
+            ? 'The encoder is offline right now; it starts automatically when it is back.'
+            : 'The stored file is being encoded for the apps. Gumlet is not affected.',
+        );
+      }
+    } catch (error) {
+      toast.error(error, 'Mobile processing could not be started');
     }
   }
 
@@ -268,7 +322,17 @@ export function LessonVideoPanel({
         {!upload.isBusy && upload.phase !== 'error' ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
-              {currentStatus ? (
+              {currentStatus === 'FAILED' && detail?.gumlet && detail.source?.state === 'VERIFIED' ? (
+                // One red "Failed" on its own read as "the upload failed". When
+                // the API reports the pipelines separately, the row below says
+                // which one failed, and this line says what did NOT fail.
+                <p className="text-sm text-foreground" data-testid="panel-headline">
+                  The file is uploaded.{' '}
+                  {detail.mobile?.status === 'READY'
+                    ? 'Gumlet processing needs attention; the mobile version is ready.'
+                    : 'Gumlet processing needs attention.'}
+                </p>
+              ) : currentStatus ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <VideoStatusBadge status={currentStatus} />
                   {/* FAILED says nothing here: the badge already reads
@@ -340,6 +404,46 @@ export function LessonVideoPanel({
                   Delete video
                 </Button>
               ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {/* --- the three independent states, at a glance ---
+            Upload, Gumlet and Mobile HLS each get their own answer, so a
+            Gumlet rejection is never read as a lost upload. Shown as soon as
+            there is a video to talk about, including while one is failing. */}
+        {videoId && detail && !upload.isBusy ? (
+          <div className="mt-2 border-t border-border pt-2">
+            <PipelineSummary
+              local={localUpload}
+              source={detail.source}
+              gumlet={detail.gumlet}
+              mobile={detail.mobile}
+            />
+          </div>
+        ) : null}
+
+        {/* --- the file is in storage, the API could not be reached to say so ---
+            NOT an upload failure, and never worded as one: every byte was
+            acknowledged by storage. Only the confirmation is missing, and
+            asking for it does not send the file again. */}
+        {upload.phase === 'unconfirmed' ? (
+          <div className="mt-2 rounded-lg border border-warning/30 bg-warning-soft px-3 py-2" data-testid="upload-unconfirmed">
+            <p className="text-sm font-medium text-foreground">The file was uploaded.</p>
+            <p className="mt-0.5 text-xs text-muted">
+              The server could not be reached to confirm it, so processing has not been scheduled
+              yet. Nothing was lost and nothing needs to be uploaded again.
+            </p>
+            <div className="mt-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={confirmUpload.isPending}
+                onClick={() => void runConfirmUpload()}
+              >
+                Check whether the file arrived
+              </Button>
             </div>
           </div>
         ) : null}
@@ -451,8 +555,11 @@ export function LessonVideoPanel({
 
       {currentStatus === 'FAILED' ? (
         <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2">
+          {/* Named for the pipeline that failed. "Processing failed" on its
+              own read as "the upload failed", and it said nothing about the
+              mobile version, which is processed separately and may be fine. */}
           <p role="alert" className="text-sm font-medium text-danger">
-            Processing failed
+            {onGumlet ? 'Gumlet processing failed' : 'Processing failed'}
           </p>
           {detail?.processingError ? (
             <p className="mt-0.5 text-xs text-danger">{detail.processingError}</p>
@@ -465,7 +572,7 @@ export function LessonVideoPanel({
               loading={retry.isPending}
               onClick={() => void runRetry()}
             >
-              Try processing again
+              {onGumlet ? 'Retry Gumlet' : 'Try processing again'}
             </Button>
             <Button type="button" variant="ghost" size="sm" onClick={pick}>
               Upload a different file
@@ -473,6 +580,13 @@ export function LessonVideoPanel({
           </div>
           <p className="mt-1.5 text-xs text-muted">
             The uploaded file is still in storage, so retrying does not upload it again.
+            {onGumlet && detail?.mobile
+              ? detail.mobile.status === 'READY'
+                ? ' The mobile version is ready and is not affected.'
+                : mobileInFlight
+                  ? ' The mobile version is being processed separately and is not affected.'
+                  : ''
+              : ''}
           </p>
         </div>
       ) : null}
@@ -488,6 +602,7 @@ export function LessonVideoPanel({
       {currentStatus === 'UPLOADING' &&
       detail &&
       detail.uploadConfirmed === false &&
+      upload.phase !== 'unconfirmed' &&
       !upload.isBusy ? (
         <div className="rounded-lg border border-border bg-surface-alt/40 px-3 py-2">
           <p className="text-xs text-muted">
@@ -580,6 +695,21 @@ export function LessonVideoPanel({
           syncing={syncGumlet.isPending}
         />
       ) : null}
+
+      {/* --- the independent mobile pipeline -------------------------------
+          Its own state and its own retry. Rendered only when the API reports
+          it, so an older backend simply shows nothing here. Starting a first
+          encode for a video that never had one is an administrator's call (the
+          back catalogue is processed in controlled batches); retrying a failed
+          one is offered to anyone who can manage the lecture. */}
+      {videoId && detail?.mobile && !upload.isBusy ? (
+        <MobilePipelinePanel
+          mobile={detail.mobile}
+          canStart={isAdmin}
+          retrying={retryMobile.isPending}
+          onRetry={() => void runRetryMobile()}
+        />
+      ) : null}
     </div>
   );
 }
@@ -645,7 +775,9 @@ function GumletPanel({
    */
   function describeState(): string {
     if (isFailed) {
-      return gumletError ?? 'Gumlet reported a problem and this video is not playable.';
+      // "Not playable" was too broad: the mobile apps have their own version,
+      // which this panel knows nothing about and which may be perfectly fine.
+      return gumletError ?? 'Gumlet reported a problem, so this video cannot be played through Gumlet.';
     }
     if (videoStatus === 'READY') {
       return 'Packaged and encrypted. Students play it as DRM-protected DASH.';
