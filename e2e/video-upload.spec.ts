@@ -189,7 +189,9 @@ test.describe('lecture video', () => {
     await dialog.locator('input[type="file"]').setInputFiles(VIDEO);
     await expect(dialog.getByText('Processing failed')).toBeVisible({ timeout: 20_000 });
 
-    await dialog.getByRole('button', { name: 'Try processing again' }).click();
+    // The stub delivers through Gumlet, so the retry is named for the
+    // pipeline it retries: there is a separate one for Mobile HLS.
+    await dialog.getByRole('button', { name: 'Retry Gumlet' }).click();
 
     // No file input is touched here: the retry is asserted to reach READY on
     // the stored source alone.

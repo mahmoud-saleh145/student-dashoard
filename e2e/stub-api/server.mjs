@@ -133,6 +133,24 @@ const control = {
   // Arms the next transcode to fail, so the FAILED + retry path is testable.
   failProcessing: false,
   /**
+   * THE TWO PIPELINES ARE MODELLED SEPARATELY, as they are in the real API.
+   *
+   * `failProcessing` / `gumletRejects` fail the Gumlet (web) side only;
+   * `mobileFails` fails the mobile encode only; `mobileWorkerOffline` leaves
+   * the mobile job queued with no encoder checked in. Each video's mobile
+   * state advances on its own clock and is never touched by a Gumlet retry,
+   * and vice versa - which is exactly the property the dashboard tests assert.
+   */
+  gumletRejects: false,
+  mobileFails: false,
+  mobileWorkerOffline: false,
+  /** Extra polls the next mobile encode spends in PROCESSING (it outlasts Gumlet). */
+  mobileSlowPolls: 0,
+  /** How many of the next `complete` calls answer 503 (the API is unreachable). */
+  completeUnreachable: 0,
+  /** Calls per endpoint, so a test can prove a retry hit ONE pipeline. */
+  pipelineCalls: { complete: 0, gumletRetry: 0, mobileRetry: 0 },
+  /**
    * videoId -> { status, polls, willFail }.
    *
    * Transcoding is a real background job with no push channel, so the
@@ -1106,8 +1124,86 @@ function videoDetail(videoId, status, processingError, extra = {}) {
     gumletAssetId: ready ? 'asset-stub' : null,
     gumletStatus: ready ? 'ready' : null,
     gumletError: null,
+    ...pipelineBlocks(status, processingError, extra),
     ...extra,
   };
+}
+
+/**
+ * The `source` / `gumlet` / `mobile` blocks of the status response, derived
+ * the way the real API derives them. `extra.mobileState` carries the video's
+ * own mobile lifecycle; a video the stub knows nothing about (the seeded READY
+ * one) is reported as ready on both.
+ */
+function pipelineBlocks(status, processingError, extra) {
+  const confirmed = extra.uploadConfirmed !== false && status !== 'UPLOADING';
+  const gumletState =
+    status === 'READY'
+      ? 'READY'
+      : status === 'FAILED'
+        ? 'FAILED'
+        : status === 'UPLOADING'
+          ? 'WAITING_UPLOAD'
+          : status === 'QUEUED'
+            ? 'PENDING'
+            : 'PROCESSING';
+  const m = extra.mobileState ?? { status: status === 'READY' ? 'READY' : 'NONE', attempts: 1 };
+  const waiting = m.status === 'QUEUED' || m.status === 'PROCESSING';
+  const blocks = {
+    source: { state: confirmed ? 'VERIFIED' : 'UPLOADING', sizeBytes: confirmed ? 512_000_000 : null },
+    gumlet: {
+      state: gumletState,
+      providerStatus: status === 'READY' ? 'ready' : status === 'FAILED' ? 'errored' : null,
+      hasAsset: status === 'READY' || status === 'FAILED',
+      queued: status === 'QUEUED' ? true : null,
+      error: status === 'FAILED' ? processingError : null,
+      updatedAt: null,
+      drmVerified: status === 'READY',
+      canRetry: status === 'FAILED' && confirmed,
+    },
+    mobile: {
+      status: m.status,
+      error: m.status === 'FAILED' ? 'ffmpeg exited with code 1: Invalid data found when processing input' : null,
+      jobId: m.status === 'NONE' ? null : `mobile-hls:stub:p1g${m.attempts ?? 1}`,
+      requestedAt: m.status === 'NONE' ? null : '2026-02-01T10:00:05.000Z',
+      queued: m.status === 'QUEUED' ? true : null,
+      attempts: m.status === 'NONE' ? 0 : (m.attempts ?? 1),
+      trigger: m.status === 'NONE' ? null : (m.attempts ?? 1) > 1 ? 'retry' : 'upload',
+      processingStartedAt: m.status === 'PROCESSING' || m.status === 'READY' ? '2026-02-01T10:01:00.000Z' : null,
+      processedAt: m.status === 'READY' ? '2026-02-01T10:20:00.000Z' : null,
+      renditions: m.status === 'READY' ? 3 : 0,
+      progress: m.status === 'PROCESSING' ? 40 : null,
+      active: m.status === 'PROCESSING',
+      paused: false,
+      pauseReason: null,
+      automatic: true,
+      ...(waiting
+        ? {
+            workerOnline: !control.mobileWorkerOffline,
+            workerLastSeenAt: control.mobileWorkerOffline ? '2026-02-01T08:00:00.000Z' : '2026-02-01T10:01:30.000Z',
+            workerCanTranscode: control.mobileWorkerOffline ? null : true,
+          }
+        : {}),
+      canRetry: confirmed && (m.status === 'FAILED' || m.status === 'NONE'),
+    },
+  };
+  // `mobileState` is the stub's own bookkeeping, not part of the response.
+  delete extra.mobileState;
+  return blocks;
+}
+
+/** One step of a video's MOBILE lifecycle. Independent of the Gumlet side. */
+function advanceMobile(state) {
+  const mobile = state.mobile;
+  if (!mobile || control.mobileWorkerOffline) return;
+  if (mobile.status === 'QUEUED') mobile.status = 'PROCESSING';
+  else if (mobile.status === 'PROCESSING') {
+    if (mobile.holdPolls > 0) {
+      mobile.holdPolls -= 1;
+      return;
+    }
+    mobile.status = mobile.willFail ? 'FAILED' : 'READY';
+  }
 }
 
 function fail(res, status, code, message) {
@@ -1201,6 +1297,31 @@ const server = createServer(async (req, res) => {
       });
       return ok(res, { stored: true, videoId, bytes });
     }
+    if (path === '/__test__/gumlet-rejects') {
+      // Gumlet refuses the next upload. The mobile side is not affected.
+      control.gumletRejects = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/mobile-fails') {
+      // The next mobile encode fails. The Gumlet side is not affected.
+      control.mobileFails = true;
+      return ok(res, { armed: true });
+    }
+    if (path === '/__test__/mobile-worker-offline') {
+      control.mobileWorkerOffline = url.searchParams.get('online') !== 'true';
+      return ok(res, { offline: control.mobileWorkerOffline });
+    }
+    if (path === '/__test__/mobile-slow') {
+      control.mobileSlowPolls = Number(url.searchParams.get('polls') ?? 2);
+      return ok(res, { polls: control.mobileSlowPolls });
+    }
+    if (path === '/__test__/complete-unreachable') {
+      control.completeUnreachable = Number(url.searchParams.get('times') ?? 99);
+      return ok(res, { times: control.completeUnreachable });
+    }
+    if (path === '/__test__/pipeline-calls') {
+      return ok(res, control.pipelineCalls);
+    }
     if (path === '/__test__/fail-processing') {
       control.failProcessing = true;
       return ok(res, { armed: true });
@@ -1230,6 +1351,12 @@ const server = createServer(async (req, res) => {
       control.lastUsersQuery = null;
       lastRequest.materialPatch = null;
       control.failProcessing = false;
+      control.gumletRejects = false;
+      control.mobileFails = false;
+      control.mobileWorkerOffline = false;
+      control.mobileSlowPolls = 0;
+      control.completeUnreachable = 0;
+      control.pipelineCalls = { complete: 0, gumletRetry: 0, mobileRetry: 0 };
       control.videos.clear();
       control.attachments.clear();
       control.nextAttachmentId = 1;
@@ -2039,6 +2166,14 @@ const server = createServer(async (req, res) => {
   if (completeVideo && method === 'POST') {
     const videoId = completeVideo[1];
     const body = await readBody(req);
+    control.pipelineCalls.complete += 1;
+
+    // The API itself cannot be reached. That says nothing about the file,
+    // which is already in the bucket by the time this is called.
+    if (control.completeUnreachable > 0) {
+      control.completeUnreachable -= 1;
+      return fail(res, 503, 'SERVICE_UNAVAILABLE', 'The service is temporarily unavailable.');
+    }
 
     // The real API verifies the object is really in the bucket before it
     // queues anything, and refuses a length that differs from what the client
@@ -2067,13 +2202,39 @@ const server = createServer(async (req, res) => {
       );
     }
 
+    // Idempotent, like the real endpoint: a repeated call on a video that is
+    // already accepted reports it and starts nothing new.
+    const existing = control.videos.get(videoId);
+    if (existing?.completed) {
+      return ok(res, {
+        videoId,
+        status: existing.status,
+        jobId: 'job-1',
+        alreadyQueued: true,
+        upload: { state: 'VERIFIED', sizeBytes: stored[1] },
+        gumlet: { queued: true },
+        mobile: { status: existing.mobile.status, jobId: 'mobile-hls:stub:p1g1', queued: true, automatic: true },
+      });
+    }
+
     control.videos.set(videoId, {
       status: 'QUEUED',
       polls: 0,
-      willFail: control.failProcessing,
+      willFail: control.failProcessing || control.gumletRejects,
+      gumletRejected: control.gumletRejects,
       completed: true,
+      // The mobile job is created by the same acceptance and then lives its
+      // own life.
+      mobile: { status: 'QUEUED', willFail: control.mobileFails, attempts: 1, holdPolls: control.mobileSlowPolls },
     });
-    return ok(res, { videoId, status: 'QUEUED', jobId: 'job-1' });
+    return ok(res, {
+      videoId,
+      status: 'QUEUED',
+      jobId: 'job-1',
+      upload: { state: 'VERIFIED', sizeBytes: stored[1] },
+      gumlet: { queued: true },
+      mobile: { status: 'QUEUED', jobId: 'mobile-hls:stub:p1g1', queued: true, automatic: true },
+    });
   }
 
   const videoStatus = /^\/videos\/([^/]+)\/status$/.exec(path);
@@ -2106,13 +2267,20 @@ const server = createServer(async (req, res) => {
     else if (state.status === 'PROCESSING') {
       state.status = state.willFail ? 'FAILED' : 'READY';
     }
+    // The mobile encode moves on its own, whatever the Gumlet side just did.
+    advanceMobile(state);
 
     return ok(
       res,
       videoDetail(
         videoId,
         state.status,
-        state.status === 'FAILED' ? 'ffmpeg exited with code 1: no audio stream' : null,
+        state.status === 'FAILED'
+          ? state.gumletRejected
+            ? 'Gumlet rejected the source: unsupported codec'
+            : 'ffmpeg exited with code 1: no audio stream'
+          : null,
+        state.mobile ? { mobileState: { ...state.mobile } } : {},
       ),
     );
   }
@@ -2120,14 +2288,38 @@ const server = createServer(async (req, res) => {
   const retryVideo = /^\/videos\/([^/]+)\/retry$/.exec(path);
   if (retryVideo && method === 'POST') {
     const videoId = retryVideo[1];
+    control.pipelineCalls.gumletRetry += 1;
     // Retrying clears the armed failure, so the recovery path is reachable.
+    // The MOBILE state is carried over untouched: this endpoint retries the
+    // Gumlet/web side only.
+    const previous = control.videos.get(videoId);
     control.videos.set(videoId, {
       status: 'QUEUED',
       polls: 0,
       willFail: false,
       completed: true,
+      mobile: previous?.mobile,
     });
-    return ok(res, { videoId, status: 'QUEUED', jobId: 'job-2' });
+    return ok(res, { videoId, status: 'QUEUED', jobId: 'job-2', provider: 'gumlet' });
+  }
+
+  // The mobile pipeline's own retry. It changes the mobile state and nothing
+  // else; the Gumlet status of the video is left exactly as it was.
+  const retryMobile = /^\/videos\/([^/]+)\/mobile\/retry$/.exec(path);
+  if (retryMobile && method === 'POST') {
+    const videoId = retryMobile[1];
+    control.pipelineCalls.mobileRetry += 1;
+    const state = control.videos.get(videoId);
+    if (!state) return fail(res, 404, 'NOT_FOUND', 'Video not found');
+    const mobile = state.mobile ?? { status: 'NONE', attempts: 0 };
+    if (mobile.status === 'QUEUED' || mobile.status === 'PROCESSING') {
+      return ok(res, { videoId, jobId: 'mobile-hls:stub', alreadyQueued: true, enqueued: true, workerOnline: !control.mobileWorkerOffline });
+    }
+    if (mobile.status === 'READY') {
+      return fail(res, 409, 'INVALID_STATE', 'This video is already processed for mobile. There is nothing to retry.');
+    }
+    state.mobile = { status: 'QUEUED', willFail: false, attempts: (mobile.attempts ?? 0) + 1 };
+    return ok(res, { videoId, jobId: 'mobile-hls:stub', alreadyQueued: false, enqueued: true, workerOnline: !control.mobileWorkerOffline });
   }
 
   const gumletStatus = /^\/videos\/([^/]+)\/gumlet\/status$/.exec(path);

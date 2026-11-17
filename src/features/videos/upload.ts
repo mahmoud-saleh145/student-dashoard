@@ -122,7 +122,23 @@ interface CompleteResponse {
   sourceSizeBytes?: number;
   /** True when the video was already queued and no second job was started. */
   alreadyQueued?: boolean;
+  /** The verified original. Present on APIs that report the pipelines separately. */
+  upload?: { state: 'VERIFIED'; sizeBytes: number };
+  /** `queued: false` = accepted; the job reaches the queue on its own shortly. */
+  gumlet?: { queued: boolean };
+  mobile?: { status: string; jobId: string | null; queued: boolean; automatic?: boolean };
 }
+
+/**
+ * How many times the "the bytes are in, please confirm" call is tried.
+ *
+ * It is idempotent on the server (a repeated call returns the same job), so
+ * retrying is safe, and it is worth retrying: at this point the reader has
+ * already paid for the whole upload and the only thing missing is one small
+ * request getting through.
+ */
+export const FINALIZE_ATTEMPTS = 4;
+const FINALIZE_BASE_DELAY_MS = 1200;
 
 /**
  * A storage PUT that did not succeed.
@@ -390,6 +406,13 @@ export type VideoUploadPhase =
   | 'checking'
   /** Handed off. From here the Video row's own status takes over. */
   | 'queued'
+  /**
+   * The file IS in storage (the store acknowledged every byte) but the API
+   * could not be reached to confirm it. This is not a failed upload and is
+   * never shown as one: nothing has to be sent again, the server only has to
+   * be asked - which the panel offers as "Check whether the file arrived".
+   */
+  | 'unconfirmed'
   | 'error';
 
 export interface VideoUploadState {
@@ -578,11 +601,36 @@ export function useVideoUpload(
         // The API verifies the object is really in the bucket before queueing,
         // so a "successful" PUT that stored nothing fails here rather than
         // minutes later in the worker.
-        await api.post<CompleteResponse>(
-          `videos/${init.videoId}/complete`,
-          { sizeBytes: file.size },
-          { signal: abort.signal },
-        );
+        //
+        // The store has acknowledged the file, so from here a failure to REACH
+        // the API is not a failure of the upload. It is retried (the call is
+        // idempotent), and if the API still cannot be reached the reader is
+        // told the truth: the file is stored and only needs confirming.
+        let confirmed = false;
+        for (let attempt = 1; attempt <= FINALIZE_ATTEMPTS; attempt += 1) {
+          try {
+            await api.post<CompleteResponse>(
+              `videos/${init.videoId}/complete`,
+              { sizeBytes: file.size },
+              { signal: abort.signal },
+            );
+            confirmed = true;
+            break;
+          } catch (error) {
+            if (error instanceof DOMException && error.name === 'AbortError') throw error;
+            // A definite answer about the file ("not there", "truncated") is a
+            // real failure and is reported as one.
+            if (error instanceof ApiError && DEFINITE_MISSING.has(error.status)) throw error;
+            // Not allowed, or not signed in: asking again will not change that.
+            if (error instanceof ApiError && (error.status === 401 || error.status === 403)) throw error;
+            if (attempt < FINALIZE_ATTEMPTS) await delay(FINALIZE_BASE_DELAY_MS * attempt);
+          }
+        }
+
+        if (!confirmed) {
+          setState((current) => ({ ...current, phase: 'unconfirmed', progress: 100 }));
+          return init.videoId;
+        }
 
         setState((current) => ({ ...current, phase: 'queued' }));
         onQueued.current?.(init.videoId);

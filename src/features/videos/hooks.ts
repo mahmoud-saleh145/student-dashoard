@@ -23,6 +23,89 @@ export function isTerminalGumletFailure(status: string | null | undefined): bool
 /** How often to re-check a Gumlet asset that has not settled yet. */
 const GUMLET_POLL_MS = 5000;
 
+/**
+ * THE THREE INDEPENDENT STATES OF ONE VIDEO
+ *
+ * A lecture video is one file and two unrelated processing systems:
+ *
+ *   source   the original file in storage
+ *   gumlet   managed transcoding + DRM, played by the web
+ *   mobile   our own HLS ladder, played by the Android and iOS apps
+ *
+ * None is a precondition of another. Gumlet can reject a file that the mobile
+ * encoder handles perfectly, and the encoder can be offline while Gumlet
+ * finishes. `status` on the response is the Gumlet/web lifecycle (kept for the
+ * lecture list and older code); these blocks are what the panel renders, so
+ * that "Gumlet failed" is never shown as "the upload failed".
+ *
+ * All three are optional: an API from before they existed simply omits them
+ * and the panel falls back to what it always showed.
+ */
+export type SourceState = 'NONE' | 'UPLOADING' | 'VERIFIED';
+
+export type GumletPipelineState =
+  | 'NOT_APPLICABLE'
+  | 'WAITING_UPLOAD'
+  | 'PENDING'
+  | 'SUBMITTED'
+  | 'PROCESSING'
+  | 'READY'
+  | 'FAILED';
+
+export type MobilePipelineStatus = 'NONE' | 'QUEUED' | 'PROCESSING' | 'READY' | 'FAILED';
+
+export interface VideoSourceDetail {
+  state: SourceState;
+  sizeBytes: number | null;
+}
+
+export interface VideoGumletDetail {
+  state: GumletPipelineState;
+  providerStatus: string | null;
+  hasAsset: boolean;
+  /** False while the accepted upload is still waiting to reach the queue; null when not queued. */
+  queued: boolean | null;
+  error: string | null;
+  updatedAt: string | null;
+  drmVerified: boolean;
+  canRetry: boolean;
+}
+
+export interface VideoMobileDetail {
+  status: MobilePipelineStatus;
+  error: string | null;
+  jobId: string | null;
+  /** When the current processing request was recorded (queued since). */
+  requestedAt?: string | null;
+  /** False while the request is recorded but the queue has not accepted the job yet. */
+  queued?: boolean | null;
+  /** How many times processing has been requested for this video. */
+  attempts?: number;
+  trigger?: string | null;
+  processingStartedAt: string | null;
+  processedAt: string | null;
+  renditions: number;
+  /** 0-100 while a worker is encoding; up to a minute old. */
+  progress?: number | null;
+  /** A worker has this video on its bench right now. */
+  active?: boolean;
+  /** Mobile encoding is paused by an operator and this video is waiting for it. */
+  paused?: boolean;
+  /** Administrators only. */
+  pauseReason?: string | null;
+  /** Whether new uploads are queued for mobile automatically on this deployment. */
+  automatic?: boolean;
+  workerOnline?: boolean;
+  workerLastSeenAt?: string | null;
+  workerCanTranscode?: boolean | null;
+  canRetry?: boolean;
+}
+
+/** Mobile states that will change without anyone doing anything. */
+export function isMobileInFlight(status: MobilePipelineStatus | undefined): boolean {
+  return status === 'QUEUED' || status === 'PROCESSING';
+}
+
 /** Exactly what `VideosService.status` returns. */
 export interface VideoStatusDetail {
   id: string;
@@ -78,6 +161,12 @@ export interface VideoStatusDetail {
   workerOnline?: boolean;
   workerLastSeenAt?: string | null;
   workerCanTranscode?: boolean | null;
+  /** The original file. See the note on the three states above. */
+  source?: VideoSourceDetail;
+  /** The Gumlet pipeline as one normalised state. */
+  gumlet?: VideoGumletDetail;
+  /** The independent mobile HLS pipeline. */
+  mobile?: VideoMobileDetail;
 }
 
 /** The statuses that will change on their own, so polling is worth the calls. */
@@ -88,6 +177,16 @@ const IN_FLIGHT: ReadonlySet<VideoStatus> = new Set<VideoStatus>([
 ]);
 
 const POLL_INTERVAL_MS = 4000;
+
+/**
+ * How often to re-check while ONLY the mobile encode is still in flight.
+ *
+ * Slower on purpose. A mobile encode runs for most of an hour on a single
+ * machine and its progress is published once a minute, so asking every four
+ * seconds would learn nothing new - and each of those requests costs the API
+ * a read of the worker's heartbeat on a per-request Redis plan.
+ */
+const MOBILE_POLL_INTERVAL_MS = 15_000;
 
 /**
  * One video's processing state.
@@ -105,10 +204,16 @@ export function useVideoStatus(videoId: string | null, enabled = true) {
     queryFn: () => api.get<VideoStatusDetail>(`videos/${videoId}/status`),
     enabled: enabled && Boolean(videoId),
     refetchInterval: (query) => {
-      const status = query.state.data?.status;
+      const data = query.state.data;
+      const status = data?.status;
       // No data yet: the first load is in flight, not a reason to schedule.
       if (!status) return false;
-      return IN_FLIGHT.has(status) ? POLL_INTERVAL_MS : false;
+      if (IN_FLIGHT.has(status)) return POLL_INTERVAL_MS;
+      // Gumlet has settled (READY or FAILED) but the mobile encode has not:
+      // keep following it, more slowly. Before this, a lecture whose Gumlet
+      // side finished stopped being watched and its mobile state was never
+      // shown changing at all.
+      return isMobileInFlight(data?.mobile?.status) ? MOBILE_POLL_INTERVAL_MS : false;
     },
   });
 }
@@ -131,6 +236,36 @@ export function useRetryVideoProcessing(courseId?: string) {
       ),
     onSuccess: async (_result, videoId) => {
       // Back to QUEUED, which restarts polling.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.videos.status(videoId) });
+      if (courseId) {
+        await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
+      }
+    },
+  });
+}
+
+/**
+ * Retries the MOBILE HLS encode for one video (`POST videos/:id/mobile/retry`).
+ *
+ * Touches the mobile pipeline only: the Gumlet asset, its DRM state and web
+ * playback are not reset, restarted or otherwise affected. The backend keeps
+ * the existing job when one is already queued or running, so pressing this
+ * twice cannot start two encodes.
+ */
+export function useRetryMobileProcessing(courseId?: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (videoId: string) =>
+      api.post<{
+        videoId: string;
+        jobId: string | null;
+        alreadyQueued: boolean;
+        /** False when the request is recorded but the queue has not accepted it yet. */
+        enqueued?: boolean;
+        workerOnline?: boolean;
+      }>(`videos/${videoId}/mobile/retry`),
+    onSuccess: async (_result, videoId) => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.videos.status(videoId) });
       if (courseId) {
         await queryClient.invalidateQueries({ queryKey: queryKeys.courses.all });
