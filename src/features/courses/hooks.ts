@@ -99,16 +99,21 @@ export function useCourseSections(courseId: string) {
     queryKey: queryKeys.courses.sections(courseId),
     queryFn: () => api.get<SectionRow[]>(`admin/courses/${courseId}/sections`),
     enabled: Boolean(courseId),
-    // While any lecture's video is moving through the pipeline, keep the
-    // badges and counts honest without the reader having to reload.
-    refetchInterval: (query) =>
-      (query.state.data ?? []).some((section) =>
-        (section.lessons ?? []).some((lesson) =>
-          ['UPLOADING', 'QUEUED', 'PROCESSING'].includes(lesson.video?.status ?? ''),
-        ),
-      )
-        ? 8000
-        : false,
+    // While any lecture's video is moving through a pipeline, keep the badges
+    // honest without the reader having to reload. The web (Gumlet) side moves
+    // in minutes, so it is polled briskly; a mobile encode waits its turn in a
+    // queue for much longer, so while ONLY mobile work is in flight the list is
+    // refreshed slowly. Nothing is polled once both pipelines have settled.
+    refetchInterval: (query) => {
+      const lessons = (query.state.data ?? []).flatMap((section) => section.lessons ?? []);
+      if (lessons.some((l) => ['UPLOADING', 'QUEUED', 'PROCESSING'].includes(l.video?.status ?? ''))) {
+        return 8000;
+      }
+      if (lessons.some((l) => ['QUEUED', 'PROCESSING'].includes(l.video?.mobileStatus ?? ''))) {
+        return 30000;
+      }
+      return false;
+    },
   });
 }
 

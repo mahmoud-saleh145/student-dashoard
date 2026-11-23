@@ -68,9 +68,9 @@ export function mobileChip(mobile: VideoMobileDetail | undefined): PipelineChip 
   if (!mobile) return null;
   switch (mobile.status) {
     case 'NONE':
-      return { label: 'Not started', tone: 'neutral' };
+      return { label: 'Not processed', tone: 'neutral' };
     case 'QUEUED':
-      return { label: 'Queued', tone: 'info' };
+      return { label: 'Queued', tone: 'warning' };
     case 'PROCESSING':
       return {
         label:

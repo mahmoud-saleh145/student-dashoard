@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 
-import { ContentStatusBadge, VideoStatusBadge } from '@/components/data/status';
+import { ContentStatusBadge, VideoPipelineBadges } from '@/components/data/status';
 import { ActionMenu, type ActionMenuItem } from '@/components/ui/action-menu';
 import { Button } from '@/components/ui/button';
 import { Field, Switch, TextArea, TextInput } from '@/components/ui/field';
@@ -567,7 +567,12 @@ function SectionCard({
                           Reused video
                         </Badge>
                       ) : null}
-                      {lesson.video ? <VideoStatusBadge status={lesson.video.status} /> : null}
+                      {lesson.video ? (
+                        <VideoPipelineBadges
+                          status={lesson.video.status}
+                          mobileStatus={lesson.video.mobileStatus}
+                        />
+                      ) : null}
                       {lesson.status !== 'PUBLISHED' ? (
                         <span className="text-warning">Not visible to students</span>
                       ) : !sectionVisible ? (

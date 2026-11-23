@@ -207,6 +207,12 @@ const control = {
   enrollmentState: new Map(),
   /** Videos deleted through DELETE /videos/:id. */
   deletedVideos: new Set(),
+  /**
+   * lessonId -> { status, mobileStatus } for the curriculum list, set through
+   * /__test__/lesson-video. `mobileStatus: undefined` omits the field, the way
+   * an API from before the mobile pipeline answers.
+   */
+  lessonVideoState: new Map(),
   /** `?lessonId=` sent with each DELETE /videos/:id, in order (null when absent). */
   videoDeleteLessonIds: [],
   /** courseId -> status after a lifecycle call. */
@@ -1302,6 +1308,16 @@ const server = createServer(async (req, res) => {
       control.gumletRejects = true;
       return ok(res, { armed: true });
     }
+    if (path === '/__test__/lesson-video') {
+      // ?lesson=les-1&status=FAILED&mobile=READY  (mobile=absent omits the field)
+      const lessonId = url.searchParams.get('lesson') ?? 'les-1';
+      const mobile = url.searchParams.get('mobile');
+      control.lessonVideoState.set(lessonId, {
+        status: url.searchParams.get('status') ?? 'READY',
+        mobileStatus: mobile === 'absent' ? undefined : mobile === 'null' ? null : (mobile ?? 'NONE'),
+      });
+      return ok(res, { armed: true });
+    }
     if (path === '/__test__/mobile-fails') {
       // The next mobile encode fails. The Gumlet side is not affected.
       control.mobileFails = true;
@@ -1373,6 +1389,7 @@ const server = createServer(async (req, res) => {
       control.lessonStatus.clear();
       control.deletedLessons.clear();
       control.deletedVideos.clear();
+      control.lessonVideoState.clear();
       control.videoDeleteLessonIds.length = 0;
       control.courseStatus.clear();
       control.deletedCourses.clear();
@@ -2360,7 +2377,13 @@ const server = createServer(async (req, res) => {
         isPreview: false,
         durationSeconds: 1830,
         attachmentCount: 0,
-        video: { id: 'vid-1', status: 'READY', durationSeconds: 1830, processingError: null },
+        video: {
+          id: 'vid-1',
+          status: 'READY',
+          mobileStatus: 'READY',
+          durationSeconds: 1830,
+          processingError: null,
+        },
       },
       {
         id: 'les-2',
@@ -2379,8 +2402,15 @@ const server = createServer(async (req, res) => {
     ]
       .filter((lesson) => !control.deletedLessons.has(lesson.id))
       .map((lesson) => {
-        const video =
+        const live =
           lesson.video && !control.deletedVideos.has(lesson.video.id) ? lesson.video : null;
+        // Web (`status`) and mobile (`mobileStatus`) are set independently.
+        const override = control.lessonVideoState.get(lesson.id);
+        let video = live;
+        if (live && override) {
+          video = { ...live, status: override.status, mobileStatus: override.mobileStatus };
+          if (override.mobileStatus === undefined) delete video.mobileStatus;
+        }
         return {
           ...lesson,
           title: control.lessonTitles.get(lesson.id) ?? lesson.title,
