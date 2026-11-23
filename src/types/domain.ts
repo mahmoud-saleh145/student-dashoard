@@ -78,6 +78,13 @@ export const VIDEO_STATUSES = [
 ] as const;
 export type VideoStatus = (typeof VIDEO_STATUSES)[number];
 
+/**
+ * The self-hosted mobile (HLS) pipeline's own state, independent of
+ * `VideoStatus` (which is the web/Gumlet pipeline). `NONE` = never requested.
+ */
+export const MOBILE_VIDEO_STATUSES = ['NONE', 'QUEUED', 'PROCESSING', 'READY', 'FAILED'] as const;
+export type MobileVideoStatus = (typeof MOBILE_VIDEO_STATUSES)[number];
+
 export const SUPPORT_STATUSES = ['OPEN', 'PENDING', 'RESOLVED', 'CLOSED'] as const;
 export type SupportStatus = (typeof SUPPORT_STATUSES)[number];
 
@@ -436,7 +443,13 @@ export interface LessonRow {
   /** The lecture's attached video; a deleted one is reported as null. */
   video?: {
     id: string;
+    /** The web (Gumlet) pipeline's status. Says nothing about the apps. */
     status: VideoStatus;
+    /**
+     * The mobile pipeline's status. Absent when the API predates it (shown as
+     * "unknown", never guessed from the web status).
+     */
+    mobileStatus?: MobileVideoStatus | null;
     durationSeconds: number;
     processingError?: string | null;
     /**

@@ -18,6 +18,7 @@ import type {
   EnrollmentState,
   RefundStatus,
   SupportPriority,
+  MobileVideoStatus,
   SupportStatus,
   VideoStatus,
 } from '@/types/domain';
@@ -147,6 +148,90 @@ export function VideoStatusBadge({ status }: { status: VideoStatus }) {
     ARCHIVED: 'Archived',
   };
   return <Badge tone={VIDEO_TONES[status]}>{labels[status]}</Badge>;
+}
+
+/**
+ * WEB AND MOBILE, SIDE BY SIDE
+ *
+ * A lecture video is one file and two unrelated processing pipelines:
+ *   Web     the Gumlet (DRM) pipeline, `video.status`;
+ *   Mobile  the self-hosted HLS pipeline for the apps, `video.mobileStatus`.
+ * Each badge reads only its own field. A web failure never makes the mobile
+ * badge red, a ready mobile version never makes the web badge green, and an
+ * unreported mobile status is shown as "unknown" rather than guessed.
+ */
+export interface PipelineBadgeView {
+  label: string;
+  tone: BadgeTone;
+}
+
+const WEB_VIEW: Record<VideoStatus, PipelineBadgeView> = {
+  READY: { label: 'Ready', tone: 'success' },
+  PROCESSING: { label: 'Processing', tone: 'info' },
+  QUEUED: { label: 'Queued', tone: 'warning' },
+  UPLOADING: { label: 'Uploading', tone: 'info' },
+  FAILED: { label: 'Failed', tone: 'danger' },
+  ARCHIVED: { label: 'Archived', tone: 'neutral' },
+};
+
+const MOBILE_VIEW: Record<MobileVideoStatus, PipelineBadgeView> = {
+  READY: { label: 'Ready', tone: 'success' },
+  PROCESSING: { label: 'Processing', tone: 'info' },
+  QUEUED: { label: 'Queued', tone: 'warning' },
+  FAILED: { label: 'Failed', tone: 'danger' },
+  NONE: { label: 'Not processed', tone: 'neutral' },
+};
+
+/** The web (Gumlet) pipeline's badge content. */
+export function webStatusView(status: VideoStatus): PipelineBadgeView {
+  return WEB_VIEW[status] ?? { label: 'Unknown', tone: 'neutral' };
+}
+
+/**
+ * The mobile pipeline's badge content. `undefined`/`null` means the API did not
+ * report it (an older API): "Unknown", never inferred from the web status.
+ */
+export function mobileStatusView(status: MobileVideoStatus | null | undefined): PipelineBadgeView {
+  if (!status) return { label: 'Unknown', tone: 'neutral' };
+  return MOBILE_VIEW[status] ?? { label: 'Unknown', tone: 'neutral' };
+}
+
+export function WebStatusBadge({ status }: { status: VideoStatus }) {
+  const view = webStatusView(status);
+  return (
+    <span data-testid="video-web-status" data-status={status} data-tone={view.tone}>
+      <Badge tone={view.tone}>
+        <span>Web: {view.label}</span>
+      </Badge>
+    </span>
+  );
+}
+
+export function MobileStatusBadge({ status }: { status: MobileVideoStatus | null | undefined }) {
+  const view = mobileStatusView(status);
+  return (
+    <span data-testid="video-mobile-status" data-status={status ?? 'UNKNOWN'} data-tone={view.tone}>
+      <Badge tone={view.tone}>
+        <span>Mobile: {view.label}</span>
+      </Badge>
+    </span>
+  );
+}
+
+/** "Web: … | Mobile: …" for one video. Wraps as a unit on narrow screens. */
+export function VideoPipelineBadges({
+  status,
+  mobileStatus,
+}: {
+  status: VideoStatus;
+  mobileStatus: MobileVideoStatus | null | undefined;
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1" data-testid="video-pipeline-badges">
+      <WebStatusBadge status={status} />
+      <MobileStatusBadge status={mobileStatus} />
+    </span>
+  );
 }
 
 const SUPPORT_TONES: Record<SupportStatus, BadgeTone> = {
