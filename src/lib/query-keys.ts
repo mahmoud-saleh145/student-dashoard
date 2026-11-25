@@ -62,8 +62,16 @@ export const queryKeys = {
     // video rather than the lesson: replacing a lecture's video reuses the
     // same Video row, and a stale key would show the previous run's state.
     status: (videoId: string) => ['videos', 'status', videoId] as const,
-  /** Gumlet provisioning state, mirrored from the staff status endpoint. */
-  gumlet: (videoId: string) => ['videos', 'gumlet', videoId] as const,
+    /** Gumlet provisioning state, mirrored from the staff status endpoint. */
+    gumlet: (videoId: string) => ['videos', 'gumlet', videoId] as const,
+  },
+
+  watchLimits: {
+    all: ['watch-limits'] as const,
+    student: (courseId: string, userId: string) =>
+      ['watch-limits', 'student', courseId, userId] as const,
+    resetPreview: (courseId: string, restoreDefault: boolean) =>
+      ['watch-limits', 'reset-preview', courseId, restoreDefault] as const,
   },
 
   lessons: {
