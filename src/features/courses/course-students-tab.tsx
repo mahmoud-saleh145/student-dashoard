@@ -9,6 +9,7 @@ import { EnrollmentStateBadge, RefundStatusBadge } from '@/components/data/statu
 import { ActionMenu } from '@/components/ui/action-menu';
 import { ReasonConfirmDialog } from '@/components/ui/overlay';
 import { Badge } from '@/components/ui/primitives';
+import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import {
   useCourseSections,
@@ -17,6 +18,9 @@ import {
   type RemoveStudentResult,
 } from '@/features/courses/hooks';
 import { RefundDialog } from '@/features/courses/refund-dialog';
+import { CourseResetDialog } from '@/features/watch-limits/course-reset-dialog';
+import { ManageViewsModal } from '@/features/watch-limits/manage-views-modal';
+import { useWatchLimitStrings } from '@/features/watch-limits/strings';
 import { fetchAllPages } from '@/lib/api-client';
 import {
   EXCEL_DATE_FORMAT,
@@ -94,6 +98,10 @@ export function CourseStudentsTab({
   const removeStudent = useRemoveStudentFromCourse(courseId);
   const [removing, setRemoving] = useState<CourseStudentRow | null>(null);
   const [refundingPaymentId, setRefundingPaymentId] = useState<string | null>(null);
+  // Watch-limit management (administrators only; the API refuses everyone else).
+  const [managingViews, setManagingViews] = useState<CourseStudentRow | null>(null);
+  const [resettingViews, setResettingViews] = useState(false);
+  const watchLimitText = useWatchLimitStrings();
 
   async function confirmRemoval(reason: string) {
     // The dialog's button is disabled while busy; this also covers a second
@@ -219,6 +227,19 @@ export function CourseStudentsTab({
         const refundable = refundablePayment(row);
         const latest = row.payments[0];
         return (
+          <div className="flex items-center justify-end gap-1">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={(event) => {
+                // The row itself opens the detail panel.
+                event.stopPropagation();
+                setManagingViews(row);
+              }}
+              aria-label={`${watchLimitText.t.manageViews}: ${row.user.fullName}`}
+            >
+              {watchLimitText.t.manageViews}
+            </Button>
           <ActionMenu
             label={`Actions for ${row.user.fullName}`}
             items={[
@@ -241,6 +262,7 @@ export function CourseStudentsTab({
               },
             ]}
           />
+          </div>
         );
       },
     });
@@ -323,6 +345,30 @@ export function CourseStudentsTab({
   return (
     <>
       <RefundDialog paymentId={refundingPaymentId} onClose={() => setRefundingPaymentId(null)} />
+      {isAdmin ? (
+        <>
+          <ManageViewsModal
+            courseId={courseId}
+            student={
+              managingViews
+                ? { id: managingViews.user.id, fullName: managingViews.user.fullName }
+                : null
+            }
+            onClose={() => setManagingViews(null)}
+          />
+          <CourseResetDialog
+            courseId={courseId}
+            courseTitle={courseTitle}
+            open={resettingViews}
+            onClose={() => setResettingViews(false)}
+          />
+          <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+            <Button variant="secondary" onClick={() => setResettingViews(true)}>
+              {watchLimitText.t.resetAll}
+            </Button>
+          </div>
+        </>
+      ) : null}
       <ReasonConfirmDialog
         open={removing !== null}
         onCancel={() => {
