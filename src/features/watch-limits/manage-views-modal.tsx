@@ -2,13 +2,11 @@
 
 import { useMemo, useState } from 'react';
 
-import { DataTable, type Column } from '@/components/data/data-table';
-import { ActionMenu } from '@/components/ui/action-menu';
 import { Button } from '@/components/ui/button';
 import { Field, Select, TextInput } from '@/components/ui/field';
 import { Modal } from '@/components/ui/overlay';
 import { Badge, StatTile } from '@/components/ui/primitives';
-import { ErrorState } from '@/components/ui/states';
+import { EmptyState, ErrorState, TableSkeleton } from '@/components/ui/states';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
@@ -128,15 +126,33 @@ export function ManageViewsModal({
     (video) => video.accessible && !video.isPreview && video.sharedCourses === 0,
   );
 
-  const rows = useMemo(() => {
+  const sections = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    const videos = data?.videos ?? [];
-    if (!needle) return videos;
-    return videos.filter((video) =>
-      [video.title, video.titleAr, video.sectionTitle, video.sectionTitleAr]
-        .filter(Boolean)
-        .some((text) => text!.toLowerCase().includes(needle)),
-    );
+    const groups = new Map<
+      string,
+      { title: string; titleAr: string | null; videos: WatchLimitVideo[] }
+    >();
+    for (const video of data?.videos ?? []) {
+      if (!video.accessible) continue;
+      if (
+        needle &&
+        ![video.title, video.titleAr, video.sectionTitle, video.sectionTitleAr].some((text) =>
+          text?.toLowerCase().includes(needle),
+        )
+      )
+        continue;
+      const group = groups.get(video.sectionId);
+      if (group) {
+        group.videos.push(video);
+      } else {
+        groups.set(video.sectionId, {
+          title: video.sectionTitle,
+          titleAr: video.sectionTitleAr,
+          videos: [video],
+        });
+      }
+    }
+    return Array.from(groups);
   }, [data?.videos, search]);
 
   function close() {
@@ -183,120 +199,6 @@ export function ManageViewsModal({
       toast.error(error, t.failed);
     }
   }
-
-  const columns: Column<WatchLimitVideo>[] = [
-    {
-      key: 'video',
-      header: t.video,
-      className: 'min-w-[12rem]',
-      render: (video) => (
-        <div className="flex min-w-0 flex-col">
-          <span className="truncate font-medium text-foreground">
-            {pick(video.title, video.titleAr)}
-          </span>
-          <span className="truncate text-xs text-muted sm:hidden">
-            {pick(video.sectionTitle, video.sectionTitleAr)}
-          </span>
-          {/* Phones: the counts columns are hidden, so the essentials go here. */}
-          <span className="mt-1 flex flex-wrap items-center gap-2 text-xs sm:hidden">
-            {video.isPreview ? null : (
-              <span className="text-muted tabular-nums">
-                {t.used} {number(video.usedPlays)}/{number(video.allowedPlays)} · {t.remaining}{' '}
-                <strong className="text-foreground">{number(video.remainingPlays)}</strong>
-              </span>
-            )}
-            <WatchStatusBadge status={video.status} t={t} />
-          </span>
-        </div>
-      ),
-    },
-    {
-      key: 'section',
-      header: t.section,
-      secondary: true,
-      render: (video) => (
-        <span className="text-xs text-muted">
-          {pick(video.sectionTitle, video.sectionTitleAr)}
-        </span>
-      ),
-    },
-    {
-      key: 'allowed',
-      secondary: true,
-      header: t.allowed,
-      align: 'center',
-      render: (video) =>
-        video.isPreview ? (
-          <span className="text-muted">—</span>
-        ) : (
-          <span className="inline-flex items-center gap-1 tabular-nums">
-            {number(video.allowedPlays)}
-            {video.customLimit ? (
-              <span
-                title={t.customHint}
-                className="text-[10px] font-medium text-primary uppercase"
-              >
-                {t.custom}
-              </span>
-            ) : null}
-          </span>
-        ),
-    },
-    {
-      key: 'used',
-      secondary: true,
-      header: t.used,
-      align: 'center',
-      render: (video) => (
-        <span className="tabular-nums">{video.isPreview ? '—' : number(video.usedPlays)}</span>
-      ),
-    },
-    {
-      key: 'remaining',
-      secondary: true,
-      header: t.remaining,
-      align: 'center',
-      render: (video) => (
-        <span className="font-semibold tabular-nums">
-          {video.isPreview ? '—' : number(video.remainingPlays)}
-        </span>
-      ),
-    },
-    {
-      key: 'status',
-      secondary: true,
-      header: t.status,
-      render: (video) => (
-        <div className="flex flex-col items-start gap-1">
-          <WatchStatusBadge status={video.status} t={t} />
-          {video.sharedCourses > 0 ? (
-            <span title={t.sharedHint}>
-              <Badge tone="info">{t.shared(video.sharedCourses)}</Badge>
-            </span>
-          ) : null}
-        </div>
-      ),
-    },
-    {
-      key: 'actions',
-      header: <span className="sr-only">{t.actions}</span>,
-      align: 'end',
-      render: (video) =>
-        video.accessible && !video.isPreview && video.sharedCourses === 0 ? (
-          <ActionMenu
-            label={t.actionsFor(pick(video.title, video.titleAr))}
-            items={ACTIONS.map((action) => ({
-              label: t.actionLabel[action],
-              disabled:
-                busy ||
-                (action === 'RESTORE_DEFAULT' && !video.customLimit) ||
-                (action === 'RESET_USED' && video.usedPlays === 0),
-              onSelect: () => begin(action, video),
-            }))}
-          />
-        ) : null,
-    },
-  ];
 
   const title = student ? t.manageViewsFor(student.fullName) : t.manageViews;
   const courseName = data ? pick(data.course.title, data.course.titleAr) : undefined;
@@ -421,26 +323,102 @@ export function ManageViewsModal({
               </div>
             </section>
 
-            <DataTable
-              columns={columns}
-              rows={rows}
-              rowKey={(video) => video.videoId}
-              isLoading={query.isLoading}
-              caption={title}
-              emptyTitle={search ? t.noMatch : t.noVideos}
-              emptyDescription={search ? t.noMatchHint : t.noVideosHint}
-              toolbar={
-                <div className="w-full sm:max-w-xs">
-                  <TextInput
-                    type="search"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder={t.search}
-                    aria-label={t.searchLabel}
-                  />
-                </div>
-              }
+            <TextInput
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={t.search}
+              aria-label={t.searchLabel}
+              className="w-full sm:max-w-xs"
             />
+            {query.isLoading ? (
+              <TableSkeleton />
+            ) : sections.length === 0 ? (
+              <EmptyState
+                title={search ? t.noMatch : t.noVideos}
+                description={search ? t.noMatchHint : t.noVideosHint}
+              />
+            ) : (
+              sections.map(([id, section]) => (
+                <section key={id} aria-labelledby={'wl-section-' + id} className="card">
+                  <h3
+                    id={'wl-section-' + id}
+                    className="rounded-t-lg border-b border-border bg-surface-alt px-4 py-2.5 text-sm font-semibold"
+                  >
+                    {pick(section.title, section.titleAr)}
+                  </h3>
+                  <ul className="divide-y divide-border">
+                    {section.videos.map((video) => {
+                      const videoTitle = pick(video.title, video.titleAr);
+                      return (
+                        <li key={video.videoId} className="flex flex-col gap-3 px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <h4 className="min-w-0 text-sm font-medium break-words">
+                              {videoTitle}
+                            </h4>
+                            <div className="flex flex-wrap gap-1">
+                              <WatchStatusBadge status={video.status} t={t} />
+                              {video.sharedCourses > 0 ? (
+                                <span title={t.sharedHint}>
+                                  <Badge tone="info">{t.shared(video.sharedCourses)}</Badge>
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                          {!video.isPreview ? (
+                            <dl className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs tabular-nums">
+                              {(
+                                [
+                                  [t.allowed, video.allowedPlays],
+                                  [t.used, video.usedPlays],
+                                  [t.remaining, video.remainingPlays],
+                                ] as const
+                              ).map(([label, value]) => (
+                                <div key={label} className="flex items-baseline gap-1.5">
+                                  <dt className="text-muted">{label}</dt>
+                                  <dd className="font-semibold">{number(value)}</dd>
+                                </div>
+                              ))}
+                              {video.customLimit ? (
+                                <div className="flex gap-1.5">
+                                  <dt className="sr-only">{t.allowed}</dt>
+                                  <dd>
+                                    <Badge tone="info">{t.custom}</Badge>
+                                  </dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                          ) : null}
+                          {!video.isPreview && video.sharedCourses === 0 ? (
+                            <div
+                              role="group"
+                              aria-label={t.actionsFor(videoTitle)}
+                              className="flex flex-wrap gap-2"
+                            >
+                              {ACTIONS.map((action) => (
+                                <Button
+                                  key={action}
+                                  size="sm"
+                                  variant="secondary"
+                                  disabled={
+                                    busy ||
+                                    (action === 'RESTORE_DEFAULT' && !video.customLimit) ||
+                                    (action === 'RESET_USED' && video.usedPlays === 0)
+                                  }
+                                  onClick={() => begin(action, video)}
+                                >
+                                  {t.actionLabel[action]}
+                                </Button>
+                              ))}
+                            </div>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ))
+            )}
           </>
         )}
       </div>
